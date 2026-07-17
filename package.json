@@ -8,8 +8,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "package": "node scripts/package.mjs",
     "preview": "vite preview",
-    "gen:icons": "node scripts/gen-icons.mjs"
+    "gen:icons": "node scripts/gen-icons.mjs",
+    "sync-version": "node scripts/sync-version.mjs"
   },
   "dependencies": {
     "react": "^19.1.0",

@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag and version
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || true)
+            if [ -z "$TAG" ]; then
+              echo "::error::No v* tag found. Create a tag like v1.2.3 first."
+              exit 1
+            fi
+          fi
+
+          VERSION="${TAG#v}"
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid tag '${TAG}'. Use semver tags like v1.2.3"
+            exit 1
+          fi
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Using tag: ${TAG} → version: ${VERSION}"
+
+      - name: Checkout tag
+        if: github.event_name == 'workflow_dispatch'
+        run: git checkout "${{ steps.meta.outputs.tag }}"
+
+      - name: Sync package.json / manifest version
+        run: node scripts/sync-version.mjs "${{ steps.meta.outputs.version }}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Package extension
+        run: npm run package
+
+      - name: Verify manifest version
+        run: |
+          node --input-type=module -e "
+          import fs from 'node:fs';
+          const expected = '${{ steps.meta.outputs.version }}';
+          const manifest = JSON.parse(fs.readFileSync('dist/manifest.json', 'utf8'));
+          if (manifest.version !== expected) {
+            console.error(\`manifest.version=\${manifest.version}, expected=\${expected}\`);
+            process.exit(1);
+          }
+          console.log('manifest.version OK:', manifest.version);
+          "
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: RedFlow-Sync ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            release/redflow-sync-${{ steps.meta.outputs.version }}.zip
+            release/redflow-sync-chrome.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
