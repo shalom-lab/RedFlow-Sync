@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![RedFlow-Sync Logo](logo.svg)
+<img src="logo.svg" alt="RedFlow-Sync Logo" width="128" />
 
 **将 InfoFlow Picker 的 GitHub 图文，半自动填入小红书创作者发布页**
 
@@ -28,20 +28,6 @@
 - **定时拉取**：每 6 小时 `alarms` 自动同步；配置变更 / 面板「同步」也会触发
 - **离线可用**：侧栏与导入优先读本地 Blob，不依赖当时网速
 - **消息桥接**：Content Script 经 `chrome.runtime.sendMessage` 访问扩展源 IDB
-
-## 🔒 权限与商店友好
-
-为通过 Chrome Web Store 审核，权限刻意收窄：
-
-| 类型 | 声明 | 说明 |
-|------|------|------|
-| `storage` | 安装时 | 仅存配置与上传历史 |
-| `alarms` | 安装时 | 后台定时增量同步 |
-| `optional_host_permissions` | 按需 | 仅 `api.github.com`、`raw.githubusercontent.com` |
-| Content Script matches | 安装时 | 仅 `creator.xiaohongshu.com/publish/publish*` |
-
-- **未使用**：宽泛 `host_permissions`、`tabs`、`scripting`、`declarativeNetRequest`
-- **Host permission justification**：仅用于读取用户自己配置的 InfoFlow GitHub 仓库中的 JSON/图片，经用户明确授权后访问，并缓存到本地以减少重复请求
 
 ## 🚀 快速开始
 
