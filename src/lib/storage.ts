@@ -10,14 +10,23 @@ const HISTORY_KEY = "redflow_upload_history";
 
 export async function getConfig(): Promise<ExtensionConfig> {
   const result = await chrome.storage.local.get(CONFIG_KEY);
-  return {
+  const merged: ExtensionConfig = {
     ...DEFAULT_CONFIG,
     ...(result[CONFIG_KEY] as ExtensionConfig | undefined),
   };
+  // 旧配置可能存了空 basePath，回落到默认目录
+  if (!merged.basePath?.trim()) {
+    merged.basePath = DEFAULT_CONFIG.basePath;
+  }
+  return merged;
 }
 
 export async function saveConfig(config: ExtensionConfig): Promise<void> {
-  await chrome.storage.local.set({ [CONFIG_KEY]: config });
+  const normalized: ExtensionConfig = {
+    ...config,
+    basePath: config.basePath.trim() || DEFAULT_CONFIG.basePath,
+  };
+  await chrome.storage.local.set({ [CONFIG_KEY]: normalized });
 }
 
 export async function getUploadHistory(): Promise<UploadHistory> {

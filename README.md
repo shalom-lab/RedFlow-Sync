@@ -15,7 +15,7 @@
 ## ✨ 功能特性
 
 ### ⚙️ 配置与面板
-- **Options / Popup**：配置 GitHub Token、仓库、分支、`basePath`、分类列表
+- **Options / Popup**：配置 GitHub Token、`owner/repo`、分支、`basePath`、分类列表
 - **右侧悬浮面板**：在 `creator.xiaohongshu.com/publish/*` 注入，按分类浏览内容卡片
 - **去重状态**：`chrome.storage.local` 记录已上传 `fileId`，已同步卡片置灰
 
@@ -54,7 +54,7 @@ npm run build       # 生产构建 → dist/
 
 1. 准备 [GitHub Personal Access Token](https://github.com/settings/tokens)（需仓库读权限）
 2. 打开扩展 Options / 侧栏 Settings
-3. 填写 Token、`owner`、`repo`、`branch`、`basePath`、分类列表并保存
+3. 填写 Token、`owner/repo`、`branch`、`basePath`（默认 `infoflow-data`）、分类列表并保存
 4. 首次使用时按提示授权 GitHub 主机权限，然后点「同步」
 
 开发模式：`npm run dev`（同样输出到 `dist`）。

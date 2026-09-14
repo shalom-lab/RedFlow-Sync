@@ -1,6 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { DEFAULT_CONFIG, type ExtensionConfig } from "@/types";
+import {
+  DEFAULT_CONFIG,
+  formatRepoSlug,
+  parseRepoSlug,
+  type ExtensionConfig,
+} from "@/types";
 import { getConfig, saveConfig, clearUploadHistory } from "@/lib/storage";
 import { requestGitHubAccess, hasGitHubAccess } from "@/lib/permissions";
 import { sendRedFlow, type SyncStatusDTO } from "@/lib/messages";
@@ -8,6 +13,7 @@ import "./options.css";
 
 function OptionsApp() {
   const [form, setForm] = useState<ExtensionConfig>(DEFAULT_CONFIG);
+  const [repoSlug, setRepoSlug] = useState("");
   const [saved, setSaved] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [githubOk, setGithubOk] = useState(false);
@@ -20,7 +26,10 @@ function OptionsApp() {
   };
 
   useEffect(() => {
-    void getConfig().then(setForm);
+    void getConfig().then((cfg) => {
+      setForm(cfg);
+      setRepoSlug(formatRepoSlug(cfg.owner, cfg.repo));
+    });
     void hasGitHubAccess().then(setGithubOk);
     void refreshStatus();
   }, []);
@@ -44,25 +53,31 @@ function OptionsApp() {
       return;
     }
 
+    const parsed = parseRepoSlug(repoSlug);
+    if (!parsed) {
+      setMessage("仓库请填写为 owner/repo，例如 shalom-lab/Info_flowPicker");
+      return;
+    }
+
     const next = {
       ...form,
-      owner: form.owner.trim(),
-      repo: form.repo.trim(),
+      owner: parsed.owner,
+      repo: parsed.repo,
       branch: form.branch.trim() || "main",
-      basePath: form.basePath.trim().replace(/^\/+|\/+$/g, ""),
+      basePath:
+        form.basePath.trim().replace(/^\/+|\/+$/g, "") ||
+        DEFAULT_CONFIG.basePath,
       categories: form.categories.trim(),
       githubToken: form.githubToken.trim(),
     };
-    if (!next.owner || !next.repo) {
-      setMessage("Owner 与 Repo 必填");
-      return;
-    }
     if (!next.categories) {
       setMessage("请至少填写一个 category（英文逗号分隔）");
       return;
     }
 
     await saveConfig(next);
+    setForm(next);
+    setRepoSlug(formatRepoSlug(next.owner, next.repo));
     setSaved(true);
     setMessage("配置与 GitHub 授权已保存，正在同步…");
 
@@ -138,26 +153,18 @@ function OptionsApp() {
             />
           </label>
 
-          <div className="opt-row">
-            <label>
-              Owner
-              <input
-                required
-                placeholder="your-username"
-                value={form.owner}
-                onChange={onChange("owner")}
-              />
-            </label>
-            <label>
-              Repo
-              <input
-                required
-                placeholder="Info_flowPicker"
-                value={form.repo}
-                onChange={onChange("repo")}
-              />
-            </label>
-          </div>
+          <label>
+            仓库（owner/repo）
+            <input
+              required
+              placeholder="shalom-lab/Info_flowPicker"
+              value={repoSlug}
+              onChange={(e) => {
+                setRepoSlug(e.target.value);
+                setSaved(false);
+              }}
+            />
+          </label>
 
           <div className="opt-row">
             <label>
@@ -171,7 +178,7 @@ function OptionsApp() {
             <label>
               Base Path
               <input
-                placeholder="如 data 或留空"
+                placeholder={DEFAULT_CONFIG.basePath}
                 value={form.basePath}
                 onChange={onChange("basePath")}
               />

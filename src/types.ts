@@ -14,9 +14,32 @@ export const DEFAULT_CONFIG: ExtensionConfig = {
   owner: "",
   repo: "",
   branch: "main",
-  basePath: "",
+  basePath: "infoflow-data",
   categories: "",
 };
+
+/** UI 用：`owner/repo`；也接受完整 GitHub URL */
+export function formatRepoSlug(owner: string, repo: string): string {
+  const o = owner.trim();
+  const r = repo.trim();
+  if (!o && !r) return "";
+  return `${o}/${r}`;
+}
+
+export function parseRepoSlug(input: string): { owner: string; repo: string } | null {
+  let raw = input.trim();
+  if (!raw) return null;
+
+  raw = raw
+    .replace(/^https?:\/\/github\.com\//i, "")
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/, "");
+
+  const parts = raw.split("/").map((s) => s.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+
+  return { owner: parts[0], repo: parts[1] };
+}
 
 /** 已上传记录 */
 export interface UploadHistory {

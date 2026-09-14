@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import { DEFAULT_CONFIG, type ExtensionConfig } from "@/types";
+import {
+  DEFAULT_CONFIG,
+  formatRepoSlug,
+  parseRepoSlug,
+  type ExtensionConfig,
+} from "@/types";
 import { fillPublishForm, waitForPublishForm } from "@/lib/dom-inject";
 import { getCategoryList } from "@/lib/github";
 import {
@@ -99,6 +104,7 @@ export function PanelApp() {
   const [config, setConfig] = useState<ExtensionConfig>(DEFAULT_CONFIG);
   const [settingsForm, setSettingsForm] =
     useState<ExtensionConfig>(DEFAULT_CONFIG);
+  const [settingsRepoSlug, setSettingsRepoSlug] = useState("");
   const [categories, setCategories] = useState<string[]>([]);
   const [category, setCategory] = useState("");
   const [items, setItems] = useState<PanelItem[]>([]);
@@ -192,6 +198,7 @@ export function PanelApp() {
     async (cfg: ExtensionConfig, preferCat?: string) => {
       setConfig(cfg);
       setSettingsForm(cfg);
+      setSettingsRepoSlug(formatRepoSlug(cfg.owner, cfg.repo));
       const cats = getCategoryList(cfg);
       setCategories(cats);
       const nextCat =
@@ -350,19 +357,23 @@ export function PanelApp() {
     setSaving(true);
     setSettingsMsg(null);
     try {
+      const parsed = parseRepoSlug(settingsRepoSlug);
+      if (!parsed) {
+        setSettingsMsg("仓库请填写为 owner/repo");
+        return;
+      }
+
       const next: ExtensionConfig = {
         githubToken: settingsForm.githubToken.trim(),
-        owner: settingsForm.owner.trim(),
-        repo: settingsForm.repo.trim(),
+        owner: parsed.owner,
+        repo: parsed.repo,
         branch: settingsForm.branch.trim() || "main",
-        basePath: settingsForm.basePath.trim().replace(/^\/+|\/+$/g, ""),
+        basePath:
+          settingsForm.basePath.trim().replace(/^\/+|\/+$/g, "") ||
+          DEFAULT_CONFIG.basePath,
         categories: settingsForm.categories.trim(),
       };
 
-      if (!next.owner || !next.repo) {
-        setSettingsMsg("Owner 与 Repo 必填");
-        return;
-      }
       if (!next.categories) {
         setSettingsMsg("请至少填写一个 category");
         return;
@@ -627,28 +638,19 @@ export function PanelApp() {
             />
           </label>
 
-          <div className="redflow-settings-row">
-            <label className="redflow-label">
-              Owner
-              <input
-                className="redflow-input"
-                required
-                placeholder="username"
-                value={settingsForm.owner}
-                onChange={onSettingsChange("owner")}
-              />
-            </label>
-            <label className="redflow-label">
-              Repo
-              <input
-                className="redflow-input"
-                required
-                placeholder="Info_flowPicker"
-                value={settingsForm.repo}
-                onChange={onSettingsChange("repo")}
-              />
-            </label>
-          </div>
+          <label className="redflow-label">
+            仓库（owner/repo）
+            <input
+              className="redflow-input"
+              required
+              placeholder="shalom-lab/Info_flowPicker"
+              value={settingsRepoSlug}
+              onChange={(e) => {
+                setSettingsRepoSlug(e.target.value);
+                setSettingsMsg(null);
+              }}
+            />
+          </label>
 
           <div className="redflow-settings-row">
             <label className="redflow-label">
@@ -664,7 +666,7 @@ export function PanelApp() {
               Base Path
               <input
                 className="redflow-input"
-                placeholder="可选"
+                placeholder={DEFAULT_CONFIG.basePath}
                 value={settingsForm.basePath}
                 onChange={onSettingsChange("basePath")}
               />
