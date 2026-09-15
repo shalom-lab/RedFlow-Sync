@@ -11,23 +11,35 @@ export type RedFlowRequest =
       variant?: "thumb" | "full";
     }
   | {
+      type: "GET_IMAGES";
+      category: string;
+      fileId: string;
+    }
+  | {
       type: "FETCH_REMOTE_IMAGE";
       /** raw.githubusercontent.com 等已授权域名 */
       url: string;
     }
-  | { type: "GET_SYNC_STATUS" };
+  | { type: "GET_SYNC_STATUS" }
+  | { type: "MARK_UPLOADED"; category: string; fileId: string }
+  | { type: "CLEAR_UPLOADED" }
+  | { type: "WIPE_ALL_DATA" };
 
 export interface CachedItemDTO {
   fileId: string;
   category: string;
   title: string;
   body: string;
+  keywords: string[];
+  replyKeyword: string;
   imagePath: string;
   imageRawUrl: string;
   jsonPath: string;
   jsonSha: string;
   imageSha: string | null;
   updatedAt: string;
+  uploaded: boolean;
+  uploadedAt: string | null;
   hasImage: boolean;
   hasThumb: boolean;
 }
@@ -42,7 +54,11 @@ export interface SyncStatusDTO {
 export type RedFlowResponse =
   | { ok: true; items: CachedItemDTO[]; status: SyncStatusDTO }
   | { ok: true; status: SyncStatusDTO; result?: SyncRunResult }
-  | { ok: true; blob: ArrayBuffer; mime: string }
+  | { ok: true; blob: string; mime: string; bytes: number }
+  | {
+      ok: true;
+      blobs: Array<{ base64: string; mime: string; bytes: number }>;
+    }
   | { ok: true; status: SyncStatusDTO }
   | { ok: false; error: string };
 

@@ -1,6 +1,7 @@
-import type { ExtensionConfig, InfoFlowJson } from "@/types";
+import type { ExtensionConfig } from "@/types";
+import { DRAFTS_CATEGORY } from "@/types";
 import { hasGitHubAccess, githubAccessDeniedMessage } from "./permissions";
-import { parseCategories } from "./storage";
+
 export class GitHubApiError extends Error {
   constructor(
     message: string,
@@ -57,7 +58,6 @@ export async function listDirectory(
   const url = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${encodedPath}?ref=${encodeURIComponent(config.branch)}`;
   const res = await fetch(url, { headers: authHeaders(config.githubToken) });
 
-  // 404：可能路径错误 / 私仓未授权被伪装成 404——绝不当「空目录」去删本地缓存
   if (res.status === 404) {
     return { entries: [], missing: true };
   }
@@ -113,30 +113,34 @@ export async function fetchBlob(
   return blob;
 }
 
-export function deriveTitle(json: InfoFlowJson, fileId: string): string {
-  const notes = (json.notes ?? "").trim();
-  if (notes) return notes.slice(0, 20);
-  if (typeof json.title === "string" && json.title.trim()) {
-    return json.title.trim().slice(0, 20);
-  }
-  return `【AI灵感】${fileId}`;
-}
-
-export function resolveImagePath(
+/** 读取单个文件元信息；不存在返回 null */
+export async function getFileMeta(
   config: ExtensionConfig,
-  category: string,
-  fileId: string,
-  json: InfoFlowJson,
-): string {
-  if (json.image && typeof json.image === "string") {
-    if (json.image.startsWith("http")) return json.image;
-    return joinPath(config.basePath, json.image);
+  filePath: string,
+): Promise<GitHubContentItem | null> {
+  const encodedPath = filePath
+    .split("/")
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join("/");
+  const url = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${encodedPath}?ref=${encodeURIComponent(config.branch)}`;
+  const res = await fetch(url, { headers: authHeaders(config.githubToken) });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new GitHubApiError(
+      `GitHub API 失败 (${res.status}): ${text || res.statusText}`,
+      res.status,
+    );
   }
-  return joinPath(config.basePath, "Images", category, `${fileId}.png`);
+  const data = (await res.json()) as GitHubContentItem | GitHubContentItem[];
+  if (Array.isArray(data) || data.type !== "file") return null;
+  return data;
 }
 
-export function getCategoryList(config: ExtensionConfig): string[] {
-  return parseCategories(config.categories);
+/** 当前数据源为单一草稿索引，侧栏固定一个分类 */
+export function getCategoryList(_config: ExtensionConfig): string[] {
+  return [DRAFTS_CATEGORY];
 }
 
 export async function assertGitHubReady(
@@ -145,7 +149,6 @@ export async function assertGitHubReady(
   if (!config.owner || !config.repo) {
     throw new GitHubApiError("请先配置 owner / repo");
   }
-  // 后台 / 同步路径禁止 permissions.request（无用户手势）
   if (!(await hasGitHubAccess())) {
     throw new GitHubApiError(githubAccessDeniedMessage());
   }

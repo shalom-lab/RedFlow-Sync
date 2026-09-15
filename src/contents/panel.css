@@ -11,18 +11,21 @@
 }
 
 .redflow-panel {
-  position: fixed;
-  top: 72px;
-  right: 16px;
-  z-index: 2147483646;
-  width: 350px;
-  max-height: calc(100vh - 96px);
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  z-index: auto;
+  width: 100%;
+  max-height: none;
+  height: 100%;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(165deg, #fff 0%, #fafaf9 45%, #fff7ed 100%);
-  border: 1px solid var(--rf-line);
-  border-radius: var(--rf-radius);
-  box-shadow: var(--rf-shadow);
+  background: linear-gradient(180deg, #ffffff 0%, #fafaf9 55%, #fff7ed 100%);
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   color: var(--rf-ink);
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 13px;
@@ -62,64 +65,6 @@
   }
   100% {
     transform: translateX(320%);
-  }
-}
-
-.redflow-logo.is-spin {
-  animation: rf-pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes rf-pulse {
-  0%,
-  100% {
-    transform: scale(1);
-    filter: brightness(1);
-  }
-  50% {
-    transform: scale(1.06);
-    filter: brightness(1.15);
-  }
-}
-
-.redflow-sync-text {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  color: var(--rf-accent);
-  font-weight: 600;
-}
-
-.redflow-dots {
-  display: inline-flex;
-  gap: 3px;
-  margin-left: 4px;
-}
-
-.redflow-dots i {
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--rf-accent);
-  animation: rf-dot 1s ease-in-out infinite;
-}
-
-.redflow-dots i:nth-child(2) {
-  animation-delay: 0.15s;
-}
-.redflow-dots i:nth-child(3) {
-  animation-delay: 0.3s;
-}
-
-@keyframes rf-dot {
-  0%,
-  80%,
-  100% {
-    opacity: 0.25;
-    transform: translateY(0);
-  }
-  40% {
-    opacity: 1;
-    transform: translateY(-2px);
   }
 }
 
@@ -218,73 +163,19 @@
 
 .redflow-fab {
   position: fixed;
-  top: 88px;
-  right: 16px;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
   z-index: 2147483646;
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 72px;
   border: none;
-  border-radius: 12px;
+  border-radius: 10px 0 0 10px;
   background: linear-gradient(145deg, #e11d48, #be123c);
   color: #fff;
   font-weight: 700;
   cursor: pointer;
   box-shadow: var(--rf-shadow);
-}
-
-.redflow-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 14px 14px 10px;
-  border-bottom: 1px solid var(--rf-line);
-}
-
-.redflow-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.redflow-brand strong {
-  display: block;
-  font-size: 14px;
-}
-
-.redflow-brand p {
-  margin: 2px 0 0;
-  color: var(--rf-muted);
-  font-size: 11px;
-}
-
-.redflow-logo {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: linear-gradient(145deg, #e11d48, #9f1239);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.02em;
-}
-
-.redflow-icon-btn {
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--rf-muted);
-  font-size: 18px;
-  cursor: pointer;
-}
-
-.redflow-icon-btn:hover {
-  background: var(--rf-accent-soft);
-  color: var(--rf-accent);
 }
 
 .redflow-toolbar {
@@ -293,7 +184,7 @@
 
 .redflow-tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 4px;
   padding: 8px 12px 0;
 }
@@ -326,6 +217,50 @@
   font-weight: 650;
   cursor: pointer;
   text-decoration: underline;
+}
+
+.redflow-link-danger {
+  color: #b91c1c;
+}
+
+.redflow-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 0;
+  color: var(--rf-ink);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.redflow-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--rf-accent);
+}
+
+.redflow-wipe-confirm {
+  padding: 10px;
+  border: 1px solid #e7e5e4;
+  border-radius: 12px;
+  background: #fafaf9;
+}
+
+.redflow-wipe-confirm p {
+  margin: 0 0 8px;
+  color: #57534e;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.redflow-wipe-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.redflow-wipe-actions .redflow-btn {
+  flex: 1;
 }
 
 .redflow-settings {
@@ -380,6 +315,47 @@
   color: #15803d;
 }
 
+.redflow-settings-actions {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.redflow-settings-actions > .redflow-btn {
+  width: 100%;
+  height: 40px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.redflow-danger-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.redflow-btn-soft {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid #e7e5e4;
+  border-radius: 10px;
+  background: #fff;
+  color: #57534e;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.redflow-btn-soft:hover {
+  border-color: #fecdd3;
+  background: #fff7f8;
+  color: #9f1239;
+}
+
 .redflow-footer-settings {
   margin-top: auto;
   padding: 8px 0 0;
@@ -419,63 +395,95 @@
   padding: 8px 12px 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .redflow-card {
-  display: grid;
-  grid-template-columns: 72px 1fr;
-  gap: 10px;
-  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 12px 10px;
   border: 1px solid var(--rf-line);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.88);
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(28, 25, 23, 0.04);
+  transition: opacity 0.2s ease, border-color 0.2s ease;
+}
+
+.redflow-card:hover {
+  border-color: #fecdd3;
 }
 
 .redflow-card.is-synced {
-  opacity: 0.48;
+  opacity: 0.55;
+  background: #fafaf9;
 }
 
-.redflow-thumb-wrap {
-  width: 72px;
-  height: 72px;
-  border-radius: 10px;
-  overflow: hidden;
-  background:
-    linear-gradient(135deg, #fecdd3 0%, #ffedd5 100%);
-}
-
-.redflow-thumb {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.redflow-card-body h3 {
+.redflow-card-title {
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 650;
+  line-height: 1.35;
+  color: var(--rf-ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.redflow-keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+}
+
+.redflow-kw {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff1f2;
+  color: #9f1239;
+  font-size: 11px;
+  line-height: 1.5;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.redflow-card-body p {
-  margin: 4px 0 8px;
+.redflow-keywords-empty {
+  margin: 0;
   color: var(--rf-muted);
-  font-size: 12px;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  min-height: 2.7em;
+  font-size: 11px;
 }
 
-.redflow-card-actions {
+.redflow-card-foot {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid #f5f5f4;
+}
+
+.redflow-time {
+  flex: 1;
+  min-width: 0;
+  color: #a8a29e;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.redflow-muted {
+  color: var(--rf-muted);
+  font-size: 12px;
 }
 
 .redflow-btn {
@@ -490,6 +498,12 @@
   cursor: pointer;
 }
 
+.redflow-btn-sm {
+  height: 28px;
+  padding: 0 14px;
+  flex-shrink: 0;
+}
+
 .redflow-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -499,6 +513,12 @@
   background: transparent;
   color: var(--rf-ink);
   border: 1px solid var(--rf-line);
+}
+
+.redflow-btn-danger {
+  background: #e11d48;
+  color: #fff;
+  border-color: #e11d48;
 }
 
 .redflow-badge {
@@ -511,6 +531,7 @@
   color: var(--rf-muted);
   font-size: 11px;
   font-weight: 600;
+  flex-shrink: 0;
 }
 
 .redflow-footer {
@@ -521,8 +542,34 @@
   background: rgba(255, 255, 255, 0.7);
 }
 
+.redflow-footer-multi {
+  flex-wrap: wrap;
+}
+
 .redflow-footer .redflow-btn {
   flex: 1;
+  min-width: 0;
+}
+
+.redflow-auto-banner {
+  margin: 0 12px 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff1f2;
+  color: #9f1239;
+  font-size: 12px;
+}
+
+.redflow-auto-banner strong {
+  display: block;
+  font-size: 13px;
+}
+
+.redflow-auto-banner p {
+  margin: 4px 0 0;
+  font-weight: 500;
+  color: #be123c;
+  line-height: 1.4;
 }
 
 .redflow-empty,
@@ -539,14 +586,180 @@
 
 .redflow-toast {
   position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 58px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(28, 25, 23, 0.92);
+  top: 10px;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - 32px);
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(28, 25, 23, 0.88);
   color: #fff;
   font-size: 12px;
+  line-height: 1.35;
   text-align: center;
-  box-shadow: var(--rf-shadow);
+  z-index: 8;
+  pointer-events: none;
+  box-shadow: 0 8px 20px rgba(28, 25, 23, 0.2);
+}
+
+/* 测试阶段：错误钉在顶部，不自动消失 */
+.redflow-debug-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 10px 8px;
+  padding: 10px 10px 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #fecdd3;
+  background: #fff1f2;
+  color: #9f1239;
+  z-index: 6;
+}
+
+.redflow-debug-banner.is-info {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.redflow-debug-banner-text {
+  flex: 1;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, "Cascadia Code", "Segoe UI", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.redflow-debug-banner-close {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.redflow-debug-banner-close:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.redflow-history-list {
+  flex: 1;
+  overflow: auto;
+  padding: 4px 10px 12px;
+}
+
+.redflow-history-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--rf-line);
+}
+
+.redflow-history-thumb {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f5f5f4;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.redflow-history-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.redflow-history-thumb.is-empty {
+  display: block;
+  cursor: default;
+}
+
+.redflow-history-meta {
+  min-width: 0;
+  flex: 1;
+}
+
+.redflow-history-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.redflow-history-time {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--rf-muted);
+}
+
+.redflow-lightbox {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: rgba(28, 25, 23, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.redflow-lightbox-inner {
+  width: 100%;
+  max-height: 100%;
+  background: #fff;
+  border-radius: 12px;
+  overflow: auto;
+}
+
+.redflow-lightbox-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 650;
+  border-bottom: 1px solid var(--rf-line);
+}
+
+.redflow-lightbox-head button {
+  border: none;
+  background: transparent;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--rf-muted);
+}
+
+.redflow-lightbox-imgs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+}
+
+.redflow-lightbox-imgs img {
+  width: 100%;
+  border-radius: 8px;
+  display: block;
 }

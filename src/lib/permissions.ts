@@ -22,7 +22,7 @@ export async function hasGitHubAccess(): Promise<boolean> {
 }
 
 /**
- * 仅在扩展页（Options / Popup）的用户手势中调用。
+ * 仅在扩展页（侧栏「设置」）的用户手势中调用。
  * 注意：不要先 await contains，再 request——会打断用户手势导致 request 失败。
  * 已授权时 request 会立刻返回 true 且不弹窗。
  */
@@ -43,5 +43,5 @@ export async function ensureGitHubAccess(): Promise<boolean> {
 }
 
 export function githubAccessDeniedMessage(): string {
-  return "尚未授权访问 GitHub。请打开扩展 Options 页保存配置并在弹窗中允许 api.github.com / raw.githubusercontent.com。";
+  return "尚未授权访问 GitHub。请在侧栏「设置」保存配置，并在弹窗中允许 api.github.com / raw.githubusercontent.com。";
 }

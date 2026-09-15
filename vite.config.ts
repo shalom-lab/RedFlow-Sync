@@ -8,6 +8,8 @@ import manifest from "./manifest.config";
 const rootDir = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
+  // Chrome 扩展页不能用站点根路径 /assets，必须相对路径
+  base: "./",
   plugins: [react(), crx({ manifest })],
   resolve: {
     alias: {
@@ -16,5 +18,6 @@ export default defineConfig({
   },
   build: {
     sourcemap: process.env.NODE_ENV === "development",
+    emptyOutDir: true,
   },
 });

@@ -1,41 +1,292 @@
 import { itemKey } from "./keys";
+import { composePublishBody } from "./compose";
 import type { CachedItemDTO, SyncRunResult } from "./messages";
 import {
   assertGitHubReady,
   buildRawUrl,
-  deriveTitle,
   fetchBlob,
   fetchJsonFile,
-  getCategoryList,
+  getFileMeta,
   joinPath,
-  listDirectory,
-  resolveImagePath,
+  type GitHubContentItem,
 } from "./github";
 import {
+  idbClearItemsStore,
+  idbClearMediaForDraft,
   idbCountItems,
-  idbDeleteItem,
-  idbGetImage,
   idbGetMeta,
+  idbGetImage,
   idbGetThumb,
   idbListByCategory,
+  idbListImages,
   idbMediaFlagsByCategory,
-  idbPutImage,
   idbPutItem,
   idbPutThumb,
+  idbReplaceImages,
   idbSetMeta,
   type CachedItemRecord,
 } from "./idb";
 import { createThumbnailBlob } from "./thumb";
-import type { ExtensionConfig, InfoFlowJson } from "@/types";
+import { getConfig } from "./storage";
+import {
+  DRAFTS_CATEGORY,
+  DEFAULT_DRAFTS_FILE,
+  DEFAULT_IMAGES_PATH,
+  DEFAULT_PROMPTS_PATH,
+  type ExtensionConfig,
+  type WechatDraftItem,
+} from "@/types";
 
 let activeSync: Promise<SyncRunResult> | null = null;
+
+/** 单条草稿最多灌入张数 */
+const MAX_DRAFT_IMAGES = 10;
+const IMAGE_EXTS = ["png", "jpg", "jpeg", "webp"] as const;
 
 export function isSyncing(): boolean {
   return activeSync != null;
 }
 
+function draftsFilePath(config: ExtensionConfig): string {
+  const raw = (config.basePath || DEFAULT_DRAFTS_FILE).trim().replace(/^\/+/, "");
+  return raw || DEFAULT_DRAFTS_FILE;
+}
+
+/** 配图目录；配置若写成 …/Images 会自动补 Prompt */
+function imagesRoot(config: ExtensionConfig): string {
+  const raw = (config.imagesPath || DEFAULT_IMAGES_PATH)
+    .trim()
+    .replace(/^\/+|\/+$/g, "");
+  const root = raw || DEFAULT_IMAGES_PATH;
+  const last = root.split("/").pop()?.toLowerCase() ?? "";
+  if (last === "prompt") return root;
+  return joinPath(root, "Prompt");
+}
+
+/** 与配图同级：…/Images/Prompt → …/Prompt */
+function promptsRoot(config: ExtensionConfig): string {
+  const images = imagesRoot(config);
+  const m = images.match(/^(.*)\/Images\/Prompt$/i);
+  if (m) {
+    const base = (m[1] || "").replace(/^\/+|\/+$/g, "");
+    return base ? joinPath(base, "Prompt") : "Prompt";
+  }
+  return DEFAULT_PROMPTS_PATH;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((x) => (typeof x === "string" ? x.trim() : String(x ?? "").trim()))
+    .filter(Boolean);
+}
+
+/** 兼容 `{ items: [] }` / `{ data: [] }` / 顶层数组 */
+export function extractDraftItems(data: unknown): WechatDraftItem[] {
+  let rows: unknown[] = [];
+  if (Array.isArray(data)) {
+    rows = data;
+  } else if (data && typeof data === "object") {
+    const obj = data as Record<string, unknown>;
+    if (Array.isArray(obj.items)) rows = obj.items;
+    else if (Array.isArray(obj.data)) rows = obj.data;
+    else if (Array.isArray(obj.drafts)) rows = obj.drafts;
+  }
+
+  const out: WechatDraftItem[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const r = row as Record<string, unknown>;
+    const id = typeof r.id === "string" ? r.id.trim() : "";
+    if (!id) continue;
+    const title =
+      typeof r.wechat_title === "string"
+        ? r.wechat_title.trim()
+        : typeof r.title === "string"
+          ? r.title.trim()
+          : "";
+    const keywords = asStringArray(r.keywords);
+    const reply =
+      typeof r.reply_keyword === "string"
+        ? r.reply_keyword.trim()
+        : typeof r.replyKeyword === "string"
+          ? r.replyKeyword.trim()
+          : "";
+    out.push({
+      id,
+      wechat_title: title,
+      keywords,
+      reply_keyword: reply,
+    });
+  }
+  return out;
+}
+
+function draftBody(item: WechatDraftItem): string {
+  return composePublishBody({
+    keywords: item.keywords,
+    replyKeyword: item.reply_keyword,
+  });
+}
+
 /**
- * 增量同步；并发调用会共用同一次 Promise，避免「同步进行中」误报。
+ * image 为首图；images 为后续图；合并去重（按图片文件名 id）。
+ * 仅有其一则只用该字段。
+ */
+export function mergePromptImageFields(
+  image: unknown,
+  images: unknown,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: unknown) => {
+    if (typeof raw !== "string") return;
+    const stem = extractImageStem(raw);
+    if (!stem || seen.has(stem)) return;
+    seen.add(stem);
+    out.push(stem);
+  };
+  push(image);
+  if (Array.isArray(images)) {
+    for (const item of images) push(item);
+  }
+  return out;
+}
+
+/**
+ * 从 JSON 里的相对路径取出图片 id（文件名去扩展名）
+ * 例：../Images/Prompt/2026-09-14T08-29-25-380Z-jlpnai-2.png
+ *   → 2026-09-14T08-29-25-380Z-jlpnai-2
+ */
+export function extractImageStem(pathOrUrl: string): string {
+  const cleaned = pathOrUrl.trim().replace(/\\/g, "/");
+  const base = cleaned.split("/").filter(Boolean).pop() || "";
+  return base.replace(/\.(png|jpe?g|webp)$/i, "");
+}
+
+type PromptMetaJson = {
+  image?: unknown;
+  images?: unknown;
+};
+
+async function probeImageInPromptDir(
+  config: ExtensionConfig,
+  stem: string,
+): Promise<GitHubContentItem | null> {
+  const dir = imagesRoot(config);
+  for (const ext of IMAGE_EXTS) {
+    const path = joinPath(dir, `${stem}.${ext}`);
+    try {
+      const meta = await getFileMeta(config, path);
+      if (meta) return meta;
+    } catch (err) {
+      console.warn(`[RedFlow] getFileMeta 失败 ${path}`, err);
+    }
+  }
+  // Contents API 不可用时，仍按 Images/Prompt/{id}.png 构造路径，交给 raw 下载
+  return {
+    name: `${stem}.png`,
+    path: joinPath(dir, `${stem}.png`),
+    type: "file",
+    download_url: null,
+    sha: "",
+  };
+}
+
+/**
+ * 按 prompt id：
+ * 1. 读 Prompt/{id}.json
+ * 2. 合并 image（首图）+ images，取出图片文件名 id
+ * 3. 到 Images/Prompt/{图片id}.png 下载（不跟 JSON 里的相对路径走）
+ */
+export async function resolveDraftImageEntries(
+  config: ExtensionConfig,
+  draftId: string,
+): Promise<GitHubContentItem[]> {
+  const key = draftId.trim();
+  if (!key) return [];
+
+  const jsonPath = joinPath(promptsRoot(config), `${key}.json`);
+  let meta: PromptMetaJson;
+  try {
+    meta = await fetchJsonFile<PromptMetaJson>(config, jsonPath);
+  } catch (err) {
+    console.warn(`[RedFlow] 读取 Prompt JSON 失败 ${jsonPath}`, err);
+    return [];
+  }
+
+  const stems = mergePromptImageFields(meta.image, meta.images).slice(
+    0,
+    MAX_DRAFT_IMAGES,
+  );
+  if (!stems.length) {
+    console.warn(`[RedFlow] Prompt JSON 无 image/images：${jsonPath}`);
+    return [];
+  }
+
+  console.info(
+    `[RedFlow] ${key} 配图 id：`,
+    stems,
+    `→ ${imagesRoot(config)}/{id}.png`,
+  );
+
+  const entries: GitHubContentItem[] = [];
+  for (const stem of stems) {
+    const file = await probeImageInPromptDir(config, stem);
+    if (file) entries.push(file);
+  }
+  return entries;
+}
+
+/** 导入时按草稿 id → Prompt/{id}.json → Images/Prompt/{图片id}.png */
+export async function cacheDraftImages(
+  config: ExtensionConfig,
+  draftId: string,
+): Promise<{ count: number; paths: string[] }> {
+  const entries = await resolveDraftImageEntries(config, draftId);
+  if (!entries.length) {
+    return { count: 0, paths: [] };
+  }
+
+  const dir = imagesRoot(config);
+  const images: Array<{ blob: Blob; mime: string; sha: string | null }> = [];
+  const paths: string[] = [];
+
+  for (const entry of entries.slice(0, MAX_DRAFT_IMAGES)) {
+    const stem = extractImageStem(entry.name || entry.path);
+    let downloaded = false;
+    for (const ext of IMAGE_EXTS) {
+      const path = joinPath(dir, `${stem}.${ext}`);
+      try {
+        const blob = await fetchBlob(config, path);
+        const mime =
+          blob.type && blob.type.startsWith("image/")
+            ? blob.type
+            : `image/${ext === "jpg" ? "jpeg" : ext}`;
+        images.push({ blob, mime, sha: entry.sha || null });
+        paths.push(path);
+        downloaded = true;
+        break;
+      } catch (err) {
+        console.warn(`[RedFlow sync] 尝试 ${path} 失败`, err);
+      }
+    }
+    if (!downloaded) {
+      console.warn(
+        `[RedFlow sync] 配图下载失败 Images/Prompt/${stem}.png（及 jpg/webp）`,
+      );
+    }
+  }
+
+  if (images.length) {
+    await idbReplaceImages(DRAFTS_CATEGORY, draftId, images);
+  }
+  return { count: images.length, paths };
+}
+
+/**
+ * 同步草稿索引（仅 JSON，不同步图片）。
+ * 配图在导入单条时按需下载，上传成功后删除本地缓存。
  */
 export async function runIncrementalSync(
   config: ExtensionConfig,
@@ -45,7 +296,7 @@ export async function runIncrementalSync(
   activeSync = (async () => {
     const started = Date.now();
     const result: SyncRunResult = {
-      categories: 0,
+      categories: 1,
       fetchedJson: 0,
       fetchedImages: 0,
       skipped: 0,
@@ -55,25 +306,52 @@ export async function runIncrementalSync(
 
     try {
       await assertGitHubReady(config);
-      const categories = getCategoryList(config);
-      if (!categories.length) {
-        throw new Error("请先配置至少一个 category");
+      const path = draftsFilePath(config);
+      const raw = await fetchJsonFile<unknown>(config, path);
+      const drafts = extractDraftItems(raw);
+      if (!drafts.length) {
+        throw new Error(
+          `草稿文件无有效条目：${path}。请确认文件存在且含 id / wechat_title 等字段。`,
+        );
       }
 
-      for (const category of categories) {
-        result.categories += 1;
-        const partial = await syncOneCategory(config, category);
-        result.fetchedJson += partial.fetchedJson;
-        result.fetchedImages += partial.fetchedImages;
-        result.skipped += partial.skipped;
-        result.removed += partial.removed;
+      const prevRows = await idbListByCategory(DRAFTS_CATEGORY);
+      const prevById = new Map(prevRows.map((r) => [r.fileId, r]));
+      await idbClearItemsStore();
+
+      const now = new Date().toISOString();
+      const promptDir = promptsRoot(config);
+
+      for (const draft of drafts) {
+        const prev = prevById.get(draft.id);
+        // 配图路径以 Prompt/{id}.json 的 image/images 为准，导入时再解析下载
+        const imagePath = joinPath(promptDir, `${draft.id}.json`);
+        const record: CachedItemRecord = {
+          key: itemKey(DRAFTS_CATEGORY, draft.id),
+          fileId: draft.id,
+          category: DRAFTS_CATEGORY,
+          title: draft.wechat_title || `【草稿】${draft.id}`,
+          body: draftBody(draft),
+          keywords: draft.keywords,
+          replyKeyword: draft.reply_keyword,
+          imagePath,
+          imageRawUrl: buildRawUrl(config, imagePath),
+          jsonPath: path,
+          jsonSha: `drafts:${drafts.length}:${draft.id}`,
+          imageSha: null,
+          updatedAt: now,
+          uploaded: prev?.uploaded ?? false,
+          uploadedAt: prev?.uploadedAt ?? null,
+        };
+        await idbPutItem(record);
+        result.fetchedJson += 1;
       }
 
       result.durationMs = Date.now() - started;
       await idbSetMeta({
         lastSyncAt: new Date().toISOString(),
         lastError: null,
-        lastResultSummary: `+json ${result.fetchedJson} / +img ${result.fetchedImages} / skip ${result.skipped} / rem ${result.removed}`,
+        lastResultSummary: `drafts ${result.fetchedJson} from ${path} (images on import)`,
       });
       return result;
     } catch (e) {
@@ -92,208 +370,6 @@ export async function runIncrementalSync(
   }
 }
 
-async function syncOneCategory(
-  config: ExtensionConfig,
-  category: string,
-): Promise<
-  Pick<SyncRunResult, "fetchedJson" | "fetchedImages" | "skipped" | "removed">
-> {
-  const stats = {
-    fetchedJson: 0,
-    fetchedImages: 0,
-    skipped: 0,
-    removed: 0,
-  };
-
-  const jsonDir = joinPath(config.basePath, category);
-  const imgDir = joinPath(config.basePath, "Images", category);
-
-  const [jsonList, imgList] = await Promise.all([
-    listDirectory(config, jsonDir),
-    listDirectory(config, imgDir),
-  ]);
-
-  // JSON 目录 404：路径/权限问题，禁止当成空目录清理本地缓存
-  if (jsonList.missing) {
-    throw new Error(
-      `分类目录不存在或无权访问：${jsonDir || "(repo root)/" + category}。请检查 basePath / category / Token。本地缓存未改动。`,
-    );
-  }
-
-  const jsonEntries = jsonList.entries;
-  const imgEntries = imgList.missing ? [] : imgList.entries;
-
-  const imgByBase = new Map(
-    imgEntries
-      .filter((e) => e.type === "file")
-      .map((e) => {
-        const base = e.name.replace(/\.(png|jpe?g|webp)$/i, "");
-        return [base, e] as const;
-      }),
-  );
-
-  const remoteIds = new Set<string>();
-  const jsonFiles = jsonEntries.filter(
-    (e) => e.type === "file" && e.name.toLowerCase().endsWith(".json"),
-  );
-
-  const localRows = await idbListByCategory(category);
-  const localById = new Map(localRows.map((r) => [r.fileId, r]));
-  const mediaFlags = await idbMediaFlagsByCategory(category);
-
-  for (const file of jsonFiles) {
-    const fileId = file.name.replace(/\.json$/i, "");
-    remoteIds.add(fileId);
-
-    const local = localById.get(fileId);
-    const imgMeta = imgByBase.get(fileId);
-    const hasImg = mediaFlags.imageKeys.has(fileId);
-    const hasThumb = mediaFlags.thumbKeys.has(fileId);
-    const needJson = !local || local.jsonSha !== file.sha;
-
-    let title = local?.title ?? `【AI灵感】${fileId}`;
-    let body = local?.body ?? "";
-    let imagePath = local?.imagePath ?? "";
-    let imageRawUrl = local?.imageRawUrl ?? "";
-    let jsonPath = file.path;
-    let imagePathChanged = false;
-
-    if (needJson) {
-      try {
-        const json = await fetchJsonFile<InfoFlowJson>(config, file.path);
-        title = deriveTitle(json, fileId);
-        body = (json.content ?? "").toString();
-        const nextPath = resolveImagePath(config, category, fileId, json);
-        const nextUrl = nextPath.startsWith("http")
-          ? nextPath
-          : buildRawUrl(config, nextPath);
-        imagePathChanged =
-          Boolean(local) &&
-          (local!.imagePath !== nextPath || local!.imageRawUrl !== nextUrl);
-        imagePath = nextPath;
-        imageRawUrl = nextUrl;
-        jsonPath = file.path;
-        stats.fetchedJson += 1;
-      } catch (err) {
-        console.warn(`[RedFlow sync] JSON 跳过 ${file.path}`, err);
-        continue;
-      }
-    }
-
-    const needImg =
-      !hasImg ||
-      imagePathChanged ||
-      Boolean(imgMeta && local?.imageSha !== imgMeta.sha);
-    const needThumbOnly = hasImg && !hasThumb && !needImg;
-
-    if (!needJson && !needImg && !needThumbOnly) {
-      stats.skipped += 1;
-      continue;
-    }
-
-    let imageSha: string | null = local?.imageSha ?? null;
-
-    if (needImg) {
-      try {
-        const pathOrUrl =
-          imageRawUrl ||
-          (imgMeta ? imgMeta.path : joinPath(imgDir, `${fileId}.png`));
-        const blob = await fetchBlob(config, pathOrUrl);
-        const mime =
-          blob.type && blob.type.startsWith("image/")
-            ? blob.type
-            : "image/png";
-        imageSha = imgMeta?.sha ?? `url:${pathOrUrl}`;
-        const key = itemKey(category, fileId);
-        const now = new Date().toISOString();
-        await idbPutImage({
-          key,
-          fileId,
-          category,
-          blob,
-          mime,
-          sha: imageSha,
-          updatedAt: now,
-        });
-        try {
-          const thumb = await createThumbnailBlob(blob);
-          await idbPutThumb({
-            key,
-            fileId,
-            category,
-            blob: thumb,
-            mime: "image/jpeg",
-            sha: imageSha,
-            updatedAt: now,
-          });
-        } catch (thumbErr) {
-          console.warn(`[RedFlow sync] 缩略图生成失败 ${fileId}`, thumbErr);
-        }
-        stats.fetchedImages += 1;
-      } catch (err) {
-        console.warn(`[RedFlow sync] 图片跳过 ${fileId}`, err);
-      }
-    } else if (needThumbOnly) {
-      try {
-        const full = await idbGetImage(category, fileId);
-        if (full?.blob) {
-          const thumb = await createThumbnailBlob(full.blob);
-          await idbPutThumb({
-            key: itemKey(category, fileId),
-            fileId,
-            category,
-            blob: thumb,
-            mime: "image/jpeg",
-            sha: full.sha,
-            updatedAt: new Date().toISOString(),
-          });
-        }
-      } catch (thumbErr) {
-        console.warn(`[RedFlow sync] 缩略图补全失败 ${fileId}`, thumbErr);
-      }
-    }
-
-    const record: CachedItemRecord = {
-      key: itemKey(category, fileId),
-      fileId,
-      category,
-      title,
-      body,
-      imagePath,
-      imageRawUrl,
-      jsonPath,
-      jsonSha: file.sha,
-      imageSha,
-      updatedAt: new Date().toISOString(),
-    };
-    await idbPutItem(record);
-  }
-
-  // 孤儿清理：列表过大时 Contents API 可能不完整，保守跳过删除
-  const locals = localRows;
-  const remoteCount = remoteIds.size;
-  const localCount = locals.length;
-  const suspiciousGap =
-    remoteCount > 0 &&
-    localCount > remoteCount * 3 &&
-    localCount - remoteCount > 30;
-
-  if (suspiciousGap) {
-    console.warn(
-      `[RedFlow sync] 跳过孤儿清理：本地 ${localCount} vs 远程 ${remoteCount}，疑似列表不完整`,
-    );
-  } else {
-    for (const row of locals) {
-      if (!remoteIds.has(row.fileId)) {
-        await idbDeleteItem(row.key);
-        stats.removed += 1;
-      }
-    }
-  }
-
-  return stats;
-}
-
 export async function getSyncStatusDto() {
   const meta = await idbGetMeta();
   return {
@@ -307,24 +383,77 @@ export async function getSyncStatusDto() {
 export async function getLocalItemsDto(
   category: string,
 ): Promise<CachedItemDTO[]> {
+  const cat = category.trim() || DRAFTS_CATEGORY;
   const [rows, flags] = await Promise.all([
-    idbListByCategory(category),
-    idbMediaFlagsByCategory(category),
+    idbListByCategory(cat),
+    idbMediaFlagsByCategory(cat),
   ]);
-  return rows.map((row) => ({
-    fileId: row.fileId,
-    category: row.category,
-    title: row.title,
-    body: row.body,
-    imagePath: row.imagePath,
-    imageRawUrl: row.imageRawUrl,
-    jsonPath: row.jsonPath,
-    jsonSha: row.jsonSha,
-    imageSha: row.imageSha,
-    updatedAt: row.updatedAt,
-    hasImage: flags.imageKeys.has(row.fileId),
-    hasThumb: flags.thumbKeys.has(row.fileId),
-  }));
+  return rows
+    .map((row) => ({
+      fileId: row.fileId,
+      category: row.category,
+      title: row.title,
+      body: row.body,
+      keywords: row.keywords ?? [],
+      replyKeyword: row.replyKeyword ?? "",
+      imagePath: row.imagePath,
+      imageRawUrl: row.imageRawUrl,
+      jsonPath: row.jsonPath,
+      jsonSha: row.jsonSha,
+      imageSha: row.imageSha,
+      updatedAt: row.updatedAt,
+      uploaded: Boolean(row.uploaded),
+      uploadedAt: row.uploadedAt ?? null,
+      hasImage: flags.imageKeys.has(row.fileId),
+      hasThumb: flags.thumbKeys.has(row.fileId),
+    }))
+    .sort((a, b) => Number(a.uploaded) - Number(b.uploaded));
+}
+
+export async function getImagesArrayBuffers(
+  category: string,
+  fileId: string,
+): Promise<Array<{ buffer: ArrayBuffer; mime: string }>> {
+  // 侧栏可先预拉；CS 再请求时直接读 IDB，缩短 tabs 消息通道占用时间
+  const existing = await idbListImages(category, fileId);
+  if (existing.length) {
+    return Promise.all(
+      existing.map(async (row) => ({
+        buffer: await row.blob.arrayBuffer(),
+        mime: row.mime || "image/png",
+      })),
+    );
+  }
+
+  // 导入时再下：不同步全量图，按条从 GitHub 拉
+  // 注意：Service Worker 里禁止 await import()——Vite preload 会访问 window
+  try {
+    const config = await getConfig();
+    await assertGitHubReady(config);
+    const cached = await cacheDraftImages(config, fileId);
+    if (!cached.count) return [];
+  } catch (err) {
+    console.warn(`[RedFlow] import-time image fetch fail ${fileId}`, err);
+    throw err;
+  }
+
+  const rows = await idbListImages(category, fileId);
+  const out: Array<{ buffer: ArrayBuffer; mime: string }> = [];
+  for (const row of rows) {
+    out.push({
+      buffer: await row.blob.arrayBuffer(),
+      mime: row.mime || "image/png",
+    });
+  }
+  return out;
+}
+
+/** 上传成功后删除该条临时配图 */
+export async function clearDraftImages(
+  category: string,
+  fileId: string,
+): Promise<void> {
+  await idbClearMediaForDraft(category, fileId);
 }
 
 export async function getImageArrayBuffer(
@@ -365,12 +494,8 @@ export async function getImageArrayBuffer(
     }
   }
 
-  const img = await idbGetImage(category, fileId);
-  if (!img?.blob) return null;
-  return {
-    buffer: await img.blob.arrayBuffer(),
-    mime: img.mime || "image/png",
-  };
+  const imgs = await getImagesArrayBuffers(category, fileId);
+  return imgs[0] ?? null;
 }
 
 /** 若距上次同步超过 thresholdMs，则触发增量同步 */
@@ -386,3 +511,5 @@ export async function syncIfStale(
   await runIncrementalSync(config);
   return true;
 }
+
+export { DRAFTS_CATEGORY };

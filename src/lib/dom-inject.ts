@@ -9,6 +9,9 @@ import {
   hasGitHubAccess,
   githubAccessDeniedMessage,
 } from "./permissions";
+import { arrayBufferToBase64 } from "./base64";
+import { formatXhsSchedule, parseXhsSchedule } from "./schedule";
+import { paceForImages, paceForText, sleep, waitPace } from "./pace";
 
 export interface FillTextPayload {
   title: string;
@@ -25,6 +28,18 @@ export interface DomFillSteps {
   title: boolean;
   body: boolean;
   image: boolean;
+  /** 是否已选中目标合集 */
+  collection?: boolean;
+  /** 是否已选中群聊 */
+  groupChat?: boolean;
+  /** 话题是否已处理 */
+  topics?: boolean;
+  /** 是否已勾选定时并写入时间 */
+  scheduled?: boolean;
+  /** 写入的定时文案 YYYY-MM-DD HH:mm */
+  scheduledAt?: string;
+  /** 是否已点击「暂存离开」 */
+  draftSaved?: boolean;
 }
 
 export class DomInjectError extends Error {
@@ -46,7 +61,74 @@ export class DomInjectError extends Error {
   }
 }
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+async function waitUntil<T>(
+  fn: () => T | false | null | undefined,
+  timeoutMs: number,
+): Promise<T | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = fn();
+    if (value) return value;
+    await sleep(150);
+  }
+  return fn() || null;
+}
+
+/** d-popover / d-select 只认指针序列，单纯 el.click() 经常打不开。 */
+function nativePointerClick(el: HTMLElement): void {
+  const rect = el.getBoundingClientRect();
+  const x = rect.left + Math.max(rect.width / 2, 4);
+  const y = rect.top + Math.max(rect.height / 2, 4);
+  const common: MouseEventInit = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    clientX: x,
+    clientY: y,
+    screenX: x,
+    screenY: y,
+    button: 0,
+    buttons: 1,
+    view: window,
+  };
+  el.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      ...common,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+    }),
+  );
+  el.dispatchEvent(new MouseEvent("mousedown", common));
+  el.dispatchEvent(
+    new PointerEvent("pointerup", {
+      ...common,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+      buttons: 0,
+    }),
+  );
+  el.dispatchEvent(new MouseEvent("mouseup", { ...common, buttons: 0 }));
+  el.dispatchEvent(new MouseEvent("click", { ...common, buttons: 0 }));
+}
+
+/**
+ * 小红书上传过程可能触发 navigator.geolocation，弹出「获取位置」打断自动化。
+ * 经 background 用 chrome.scripting（MAIN world）注入；不写页面 inline script（会被 CSP 拦）。
+ */
+export function mutePageGeolocation(): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ type: "MUTE_GEOLOCATION" }, () => {
+        void chrome.runtime.lastError;
+        resolve();
+      });
+    } catch {
+      resolve();
+    }
+  });
+}
 
 /**
  * 设置原生 value，并触发 React 认可的 input 事件。
@@ -100,38 +182,57 @@ function findByPlaceholder(
   return null;
 }
 
-/** 标题输入框：优先 class，再 placeholder */
+/** 标题：新版 `.c-input_inner` 是 wrapper DIV，真实 input 在内部 / placeholder */
 export function findTitleInput(): HTMLInputElement | null {
-  const byClass = queryFirst<HTMLInputElement>([
-    ".title-input input",
-    ".title-container input",
-    'input[class*="title"]',
-    'div[class*="title"] input',
-  ]);
-  if (byClass) return byClass;
-
   const byPh = findByPlaceholder("input", [
     "填写标题",
+    "标题会有更多赞",
     "标题",
     "title",
   ]) as HTMLInputElement | null;
-  return byPh;
+  if (byPh) return byPh;
+
+  const wrap = queryFirst<HTMLElement>([
+    ".c-input_inner",
+    ".title-input",
+    ".title-container",
+    'div[class*="title"]',
+  ]);
+  if (wrap instanceof HTMLInputElement) return wrap;
+  const nested = wrap?.querySelector<HTMLInputElement>("input");
+  if (nested) return nested;
+
+  return queryFirst<HTMLInputElement>([
+    "input.c-input_inner",
+    'input[class*="title"]',
+    'div[class*="title"] input',
+  ]);
 }
 
-/** 正文：content-textarea / contenteditable / textarea */
+/** 正文：新版 TipTap ProseMirror；兼容旧 #post-textarea */
 export function findContentEditor():
   | HTMLTextAreaElement
   | HTMLElement
   | null {
-  const textarea = queryFirst<HTMLTextAreaElement>([
+  const tipTap = queryFirst<HTMLElement>([
+    ".tiptap.ProseMirror",
+    ".tiptap-container [contenteditable='true']",
+    "div.ProseMirror[contenteditable='true']",
+  ]);
+  if (tipTap) return tipTap;
+
+  const byId = queryFirst<HTMLTextAreaElement | HTMLElement>([
+    "#post-textarea",
+    "textarea#post-textarea",
     ".content-textarea",
     ".content-textarea textarea",
     'textarea[class*="content"]',
     'div[class*="content"] textarea',
   ]);
-  if (textarea) return textarea;
+  if (byId) return byId;
 
   const editable = queryFirst<HTMLElement>([
+    '#post-textarea[contenteditable="true"]',
     '.content-textarea [contenteditable="true"]',
     'div[class*="content"][contenteditable="true"]',
     '[contenteditable="true"][data-placeholder]',
@@ -147,18 +248,194 @@ export function findContentEditor():
   ]);
 }
 
-function findFileInput(): HTMLInputElement | null {
-  const inputs = Array.from(
-    document.querySelectorAll<HTMLInputElement>('input[type="file"]'),
+/**
+ * 图文上传 input。
+ * 参考 auto-publish / OpenCLI / scriptscat：
+ * - 必须选 accept 含图片的 input（绝不能落到视频 input）
+ * - 优先 accept*=jpg / image
+ * - 穿透 open shadowRoot
+ */
+function isImageFileAccept(accept: string): boolean {
+  const a = (accept || "").toLowerCase();
+  if (!a) return false;
+  if (a.includes("video") && !a.includes("image") && !/\.jpe?g|\.png|\.webp|\.gif/.test(a)) {
+    return false;
+  }
+  return (
+    a.includes("image") ||
+    a.includes(".jpg") ||
+    a.includes(".jpeg") ||
+    a.includes(".png") ||
+    a.includes(".webp") ||
+    a.includes(".gif")
   );
+}
 
-  // 优先接受图片的隐藏 input
-  const imagePrefer = inputs.find((inp) => {
-    const accept = (inp.accept || "").toLowerCase();
-    return !accept || accept.includes("image") || accept.includes("*");
-  });
-  if (imagePrefer) return imagePrefer;
-  return inputs[0] ?? null;
+function deepQuerySelectorAll<T extends Element>(
+  selector: string,
+  root: ParentNode = document,
+): T[] {
+  const results: T[] = [];
+  const seen = new Set<ParentNode>();
+
+  const collect = (scope: ParentNode) => {
+    if (!scope || seen.has(scope)) return;
+    seen.add(scope);
+    try {
+      const list =
+        (scope as Document | ShadowRoot | Element).querySelectorAll?.(
+          selector,
+        ) ?? [];
+      results.push(...Array.from(list as NodeListOf<T>));
+    } catch {
+      return;
+    }
+    const all =
+      (scope as Document | ShadowRoot | Element).querySelectorAll?.("*") ?? [];
+    for (const el of Array.from(all)) {
+      if (el.shadowRoot) collect(el.shadowRoot);
+    }
+  };
+
+  collect(root);
+  return results;
+}
+
+function findFileInput(): HTMLInputElement | null {
+  const all = deepQuerySelectorAll<HTMLInputElement>('input[type="file"]');
+  const imageInputs = all.filter((inp) =>
+    isImageFileAccept(inp.accept || ""),
+  );
+  const ranked = imageInputs
+    .map((input) => {
+      const accept = (input.accept || "").toLowerCase();
+      let score = 0;
+      if ((input.className || "").includes("upload-input")) score += 20;
+      if (/\.jpe?g/.test(accept)) score += 10;
+      if (accept.includes("image")) score += 8;
+      if (/\.png|\.webp/.test(accept)) score += 5;
+      if (accept.includes("video") && !isImageFileAccept(accept)) score -= 50;
+      const wrap = input.closest(
+        ".upload-wrapper, .upload-container, .upload-content, [class*='upload']",
+      );
+      if (wrap) score += 6;
+      return { input, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return ranked[0]?.input ?? null;
+}
+
+function isVisibleClickable(el: HTMLElement): boolean {
+  if (el.getAttribute("aria-hidden") === "true") return false;
+  const rect = el.getBoundingClientRect();
+  if (rect.width < 4 || rect.height < 4) return false;
+  if (rect.left < -100 || rect.top < -100) return false;
+  const style = window.getComputedStyle(el);
+  if (style.display === "none" || style.visibility === "hidden") return false;
+  if (Number(style.opacity) < 0.05) return false;
+  return true;
+}
+
+/** 可见的创作者 Tab（避开 left:-9999 / aria-hidden 辅助层） */
+export function findCreatorTab(label: string): HTMLElement | null {
+  const tabs = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      ".creator-tab, [class*='creator-tab'], div.tab",
+    ),
+  );
+  for (const tab of tabs) {
+    const text = (tab.textContent || "").replace(/\s+/g, "");
+    if (!text.includes(label.replace(/\s+/g, ""))) continue;
+    if (!isVisibleClickable(tab)) continue;
+    return tab;
+  }
+  return null;
+}
+
+/**
+ * 找到可见的「上传图文」Tab（新版不一定带 .creator-tab）。
+ * URL 带 target=image 也不等于已经点过这个按钮。
+ */
+function findUploadImageTab(): HTMLElement | null {
+  const nodes = Array.from(document.querySelectorAll<HTMLElement>("*"));
+  for (const el of nodes) {
+    if (el.children.length > 3) continue;
+    const text = (el.textContent || "").replace(/\s+/g, "").trim();
+    if (text !== "上传图文") continue;
+    if (!isVisibleClickable(el)) continue;
+    return el;
+  }
+  return findCreatorTab("上传图文");
+}
+
+/**
+ * 必须先点「上传图文」。仅靠 ?target=image 页面仍可能停在「上传视频」。
+ */
+export async function ensureImageNoteTab(): Promise<boolean> {
+  // 已在图文落地页就别再点 Tab，避免 SPA 重挂载掐断通信
+  if (findFileInput() && !findTitleInput() && !findContentEditor()) {
+    return true;
+  }
+
+  const tab = findUploadImageTab();
+  if (tab) {
+    nativePointerClick(tab);
+    await waitPace("tab");
+  }
+
+  for (let i = 0; i < 20; i++) {
+    const input = findFileInput();
+    if (input) return true;
+    await sleep(220);
+  }
+
+  return Boolean(tab);
+}
+
+function findUploadDropzone(): HTMLElement | null {
+  const selectors = [
+    ".upload-wrapper",
+    ".upload-container",
+    ".upload-content",
+    "[class*='upload-container']",
+    ".drag-over",
+  ];
+  for (const sel of selectors) {
+    const el = document.querySelector<HTMLElement>(sel);
+    if (el && isVisibleClickable(el) && !(el instanceof HTMLInputElement)) {
+      return el;
+    }
+  }
+  const input = findFileInput();
+  const wrap = input?.closest<HTMLElement>(
+    "div, section, label, [class*='upload']",
+  );
+  if (wrap && wrap !== input && isVisibleClickable(wrap)) return wrap;
+  return null;
+}
+
+/**
+ * 注入前唤醒上传区：只派 pointer 事件，不 click 隐藏 file input（会弹出系统选文件框）。
+ */
+export async function primeUploadArea(): Promise<void> {
+  const zone = findUploadDropzone();
+  if (!zone) return;
+  const rect = zone.getBoundingClientRect();
+  const common: PointerEventInit = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    clientX: rect.left + rect.width / 2,
+    clientY: rect.top + Math.min(rect.height / 2, 80),
+    pointerId: 1,
+    pointerType: "mouse",
+    isPrimary: true,
+  };
+  zone.dispatchEvent(new PointerEvent("pointerdown", common));
+  zone.dispatchEvent(new PointerEvent("pointerup", { ...common, buttons: 0 }));
+  zone.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, composed: true }));
+  await waitPace("click");
 }
 
 /**
@@ -166,18 +443,35 @@ function findFileInput(): HTMLInputElement | null {
  */
 function fillContentEditable(el: HTMLElement, text: string): void {
   el.focus();
-  // 清空
-  el.textContent = "";
-  // 使用 execCommand 兼容部分编辑器（失败则回退 textContent）
   try {
     document.execCommand("selectAll", false);
-    document.execCommand("insertText", false, text);
+    document.execCommand("delete", false);
   } catch {
-    el.textContent = text;
+    el.textContent = "";
   }
 
-  if ((el.textContent || "").trim() !== text.trim()) {
-    el.textContent = text;
+  const escapeHtml = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const lines = text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((s) => s.trimEnd())
+    .filter((s) => s.length > 0);
+  const html = lines
+    .map((line) => `<p>${line.trim() ? escapeHtml(line) : "<br>"}</p>`)
+    .join("");
+  const inserted = document.execCommand("insertHTML", false, html);
+  if (!inserted) {
+    for (let i = 0; i < lines.length; i++) {
+      if (i > 0) {
+        try {
+          document.execCommand("insertParagraph", false);
+        } catch {
+          document.execCommand("insertText", false, "\n");
+        }
+      }
+      if (lines[i]) document.execCommand("insertText", false, lines[i]);
+    }
   }
 
   el.dispatchEvent(new InputEvent("input", { bubbles: true, data: text }));
@@ -185,27 +479,27 @@ function fillContentEditable(el: HTMLElement, text: string): void {
   el.dispatchEvent(new Event("blur", { bubbles: true }));
 }
 
-/** 填入标题 */
+/** 填入标题（Selenium: `.c-input_inner`） */
 export async function fillTitle(title: string): Promise<void> {
   const input = findTitleInput();
   if (!input) {
     throw new DomInjectError(
       "ELEMENT_NOT_FOUND",
-      "未找到标题输入框（.title-input input / placeholder）",
+      "未找到标题输入框（.c-input_inner）",
     );
   }
   input.focus();
-  setNativeValue(input, title.slice(0, 20)); // 小红书标题通常有长度限制
-  await sleep(50);
+  setNativeValue(input, title.slice(0, 20));
+  await sleep(paceForText(title, 420));
 }
 
-/** 填入正文（提示词 / content） */
+/** 填入正文（新版 TipTap / 旧 #post-textarea） */
 export async function fillBody(body: string): Promise<void> {
   const editor = findContentEditor();
   if (!editor) {
     throw new DomInjectError(
       "ELEMENT_NOT_FOUND",
-      "未找到正文输入区（.content-textarea / contenteditable）",
+      "未找到正文输入区（#post-textarea）",
     );
   }
 
@@ -215,7 +509,413 @@ export async function fillBody(body: string): Promise<void> {
   } else {
     fillContentEditable(editor, body);
   }
-  await sleep(50);
+  await sleep(paceForText(body, 650));
+}
+
+export async function ensureTopics(topics: string[]): Promise<boolean> {
+  const names = topics.map((t) => t.replace(/^#+/, "").trim()).filter(Boolean);
+  if (!names.length) return true;
+
+  // 1) 正文里已有 #话题 时，再点工具栏「话题」强化插入（避免重复则跳过已存在）
+  const editor = findContentEditor();
+  const existing = (editor?.textContent || "").toLocaleLowerCase();
+
+  let added = 0;
+  for (const name of names) {
+    if (existing.includes(`#${name.toLocaleLowerCase()}`)) {
+      added += 1;
+      continue;
+    }
+    const btn = document.querySelector<HTMLButtonElement>(
+      "button.contentBtn.topic-btn, button.topic-btn",
+    );
+    if (btn && isVisibleClickable(btn)) {
+      btn.click();
+      await sleep(320);
+    }
+    const ed = findContentEditor();
+    if (!ed) continue;
+    ed.focus();
+    try {
+      document.execCommand("insertText", false, `#${name} `);
+    } catch {
+      ed.textContent = `${ed.textContent || ""}#${name} `;
+      ed.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    }
+    await sleep(420);
+    // 若出现推荐标签且匹配则点选
+    const tag = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".recommend-topic-wrapper .tag, .suggestion .tag, span.tag",
+      ),
+    ).find((el) =>
+      (el.textContent || "")
+        .replace(/\s+/g, "")
+        .includes(name.replace(/\s+/g, "")),
+    );
+    if (tag && isVisibleClickable(tag)) {
+      tag.click();
+      await sleep(280);
+    }
+    added += 1;
+  }
+
+  return added > 0;
+}
+
+/** 默认加入的笔记合集 */
+export const DEFAULT_COLLECTION_NAME = "ChatGPT美图";
+
+function normalizeLabel(text: string): string {
+  return text.replace(/\s+/g, "").trim();
+}
+
+function findVisibleByText(
+  testers: Array<(t: string) => boolean>,
+  maxChildren = 6,
+): HTMLElement | null {
+  const nodes = Array.from(document.querySelectorAll<HTMLElement>("*"));
+  for (const el of nodes) {
+    if (el.children.length > maxChildren) continue;
+    if (!isVisibleClickable(el)) continue;
+    const t = normalizeLabel(el.textContent || "");
+    if (testers.some((fn) => fn(t))) return el;
+  }
+  return null;
+}
+
+function collectionTrigger(): HTMLElement | null {
+  return (
+    document.querySelector<HTMLElement>(".collection-plugin-button") ||
+    document.querySelector<HTMLElement>(".collection-plugin-choose") ||
+    findVisibleByText([(t) => t === "选择合集"], 6)
+  );
+}
+
+function collectionSelectedName(): string {
+  const el =
+    document.querySelector<HTMLElement>(
+      ".collection-plugin-choose .collection-name",
+    ) ||
+    document.querySelector<HTMLElement>(".collection-plugin-choose") ||
+    document.querySelector<HTMLElement>(".collection-plugin-button");
+  const t = normalizeLabel(el?.textContent || "");
+  if (!t || t === "选择合集" || t === "加入合集") return "";
+  return t;
+}
+
+function collectionPopover(): HTMLElement | null {
+  const pop = document.querySelector<HTMLElement>(
+    ".collection-plugin-popover, .collection-plugin-popover-content",
+  );
+  if (!pop || !isDisplayedBox(pop)) return null;
+  if (!pop.querySelector(".item")) return null;
+  return pop;
+}
+
+async function runMainWorldSelect(
+  name: string,
+): Promise<{ ok: boolean; selected?: string; error?: string }> {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(
+        { type: "MAIN_WORLD_SELECT", kind: "collection", name },
+        (response) => {
+          void chrome.runtime.lastError;
+          resolve(
+            (response as { ok: boolean; selected?: string; error?: string }) || {
+              ok: false,
+              error: "无响应",
+            },
+          );
+        },
+      );
+    } catch (e) {
+      resolve({
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+}
+
+function isDisplayedBox(el: HTMLElement): boolean {
+  const style = window.getComputedStyle(el);
+  if (style.display === "none" || style.visibility === "hidden") return false;
+  if (Number(style.opacity) < 0.05) return false;
+  const rect = el.getBoundingClientRect();
+  return rect.width > 40 && rect.height > 24;
+}
+
+/** 已展开就不要再点标题，否则会把「内容设置」收起来。 */
+async function expandContentSettings(): Promise<void> {
+  const trigger = collectionTrigger();
+  if (trigger && isVisibleClickable(trigger)) return;
+
+  const settingHeaders = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      ".publish-page-content-setting-header, [class*='setting-header'], [class*='content-setting']",
+    ),
+  );
+  for (const h of settingHeaders) {
+    const t = h.textContent || "";
+    if (!t.includes("内容设置")) continue;
+    if (t.includes("收起")) return;
+    nativePointerClick(h);
+    await waitPace("menu");
+    break;
+  }
+}
+
+async function expandMoreSettings(): Promise<void> {
+  const schedule = findVisibleByText(
+    [(t) => t === "定时发布", (t) => t.includes("定时发布") && t.length < 16],
+    6,
+  );
+  if (schedule) return;
+
+  const headers = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      "[class*='content-settings'], [class*='setting-header']",
+    ),
+  );
+  for (const h of headers) {
+    const t = h.textContent || "";
+    if (!t.includes("更多设置")) continue;
+    if (t.includes("收起")) return;
+    nativePointerClick(h);
+    await waitPace("menu");
+    break;
+  }
+}
+
+/**
+ * 先点「选择合集」.collection-plugin-button，等列表出来再点 .item。
+ */
+export async function selectCollection(
+  collectionName: string = DEFAULT_COLLECTION_NAME,
+): Promise<boolean> {
+  const target = normalizeLabel(collectionName);
+  if (!target) return false;
+
+  await expandContentSettings();
+  await waitUntil(() => collectionTrigger(), 8000);
+
+  if (collectionSelectedName().includes(target)) return true;
+
+  const trigger = collectionTrigger();
+  if (trigger) {
+    trigger.scrollIntoView({ block: "center", inline: "nearest" });
+    await waitPace("click");
+  }
+
+  const main = await runMainWorldSelect(collectionName);
+  if (main.ok) return true;
+
+  const btn = collectionTrigger();
+  if (!btn) return false;
+  nativePointerClick(btn);
+  const pop = await waitUntil(() => collectionPopover(), 5000);
+  if (!pop) return false;
+  const items = Array.from(pop.querySelectorAll<HTMLElement>(".item"));
+  const match =
+    items.find((el) => normalizeLabel(el.textContent || "") === target) ||
+    items.find((el) => normalizeLabel(el.textContent || "").includes(target));
+  if (!match) return false;
+  nativePointerClick(match);
+  await waitUntil(() => collectionSelectedName().includes(target), 2500);
+  return collectionSelectedName().includes(target);
+}
+
+/**
+ * 勾选「定时发布」，把日期写进小红书允许范围内的日历（可能不是今天）。
+ * 不点击红色「发布 / 定时发布」提交按钮。
+ * 返回页面上实际生效的时间；失败返回 null。
+ */
+export async function setScheduledPublish(when: Date): Promise<Date | null> {
+  const text = formatXhsSchedule(when);
+  await expandMoreSettings();
+
+  const toggle =
+    findVisibleByText(
+      [
+        (t) => t === "定时发布",
+        (t) => t.includes("定时发布") && t.length < 16,
+      ],
+      6,
+    ) ||
+    document.querySelector<HTMLElement>(
+      ".schedule-checkbox, .el-switch, [class*='schedule']",
+    );
+
+  if (toggle) {
+    const row = toggle.closest<HTMLElement>("div") || toggle;
+    const sw =
+      row.querySelector<HTMLElement>(
+        ".d-switch, .el-switch, [role='switch'], input[type='checkbox']",
+      ) || toggle;
+    const alreadyOn =
+      sw.classList.contains("is-checked") ||
+      sw.classList.contains("is-active") ||
+      (sw instanceof HTMLInputElement && sw.checked) ||
+      sw.getAttribute("aria-checked") === "true";
+    if (!alreadyOn) {
+      nativePointerClick(sw);
+      await waitPace("menu");
+    }
+  } else {
+    return null;
+  }
+
+  const editor =
+    document.querySelector<HTMLElement>(
+      ".el-date-editor, [class*='date-editor'], [class*='date-picker']",
+    ) ||
+    Array.from(document.querySelectorAll<HTMLElement>("*")).find((el) => {
+      if (el.children.length > 6) return false;
+      const t = (el.textContent || "").trim();
+      return /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}$/.test(t);
+    });
+  if (editor && isVisibleClickable(editor)) {
+    nativePointerClick(editor);
+    await waitPace("calendar");
+  }
+
+  const input =
+    document.querySelector<HTMLInputElement>(
+      ".el-date-editor input, .el-date-editor .el-input__inner, [class*='date-editor'] input, [class*='date-picker'] input",
+    ) ||
+    Array.from(document.querySelectorAll<HTMLInputElement>("input")).find(
+      (el) =>
+        (el.placeholder || "").includes("时间") ||
+        /^\d{4}-\d{2}-\d{2}/.test(el.value || ""),
+    );
+
+  if (input) {
+    input.focus();
+    setNativeValue(input, text);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new Event("blur", { bubbles: true }));
+    await waitPace("click");
+  }
+
+  await pickCalendarDay(when);
+
+  const hour = when.getHours();
+  const minute = when.getMinutes();
+  const hourEl = findVisibleByText(
+    [(t) => t === `${hour}时`, (t) => t === `${hour}小时`],
+    2,
+  );
+  if (hourEl) {
+    nativePointerClick(hourEl);
+    await waitPace("calendar");
+  }
+  const minuteEl = findVisibleByText(
+    [(t) => t === `${minute}分`, (t) => t === `${minute}分钟`],
+    2,
+  );
+  if (minuteEl) {
+    nativePointerClick(minuteEl);
+    await waitPace("calendar");
+  }
+
+  if (input && input.value.replace(/\s+/g, "") !== text.replace(/\s+/g, "")) {
+    setNativeValue(input, text);
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new Event("blur", { bubbles: true }));
+  }
+
+  await waitPace("step");
+  const appliedText = input?.value?.trim() || text;
+  return parseXhsSchedule(appliedText) ?? when;
+}
+
+function calendarHeaderShowsMonth(when: Date): boolean {
+  const y = when.getFullYear();
+  const m = when.getMonth() + 1;
+  const want = [
+    `${y}年${m}月`,
+    `${y}年${String(m).padStart(2, "0")}月`,
+    `${y}-${String(m).padStart(2, "0")}`,
+  ];
+  const labels = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      ".el-date-picker__header-label, .el-picker-panel__icon-btn, [class*='picker-header'], [class*='date-picker']",
+    ),
+  );
+  return labels.some((el) => {
+    const t = (el.textContent || "").replace(/\s+/g, "");
+    return want.some((w) => t.includes(w));
+  });
+}
+
+function clickPickerNextMonth(): boolean {
+  const btn =
+    document.querySelector<HTMLElement>(
+      ".el-icon-arrow-right, .el-date-picker__next-btn, .d-picker-header-next, button[aria-label*='下一'], [class*='arrow-right']",
+    ) ||
+    Array.from(document.querySelectorAll<HTMLElement>("button, span, i")).find(
+      (el) => {
+        const label = (el.getAttribute("aria-label") || el.textContent || "").trim();
+        return label.includes("下个月") || label.includes("下一月");
+      },
+    );
+  if (!btn || !isVisibleClickable(btn)) return false;
+  nativePointerClick(btn);
+  return true;
+}
+
+function isCurrentMonthDayCell(td: HTMLElement): boolean {
+  if (td.classList.contains("prev-month") || td.classList.contains("next-month")) {
+    return false;
+  }
+  if (td.classList.contains("disabled") || td.getAttribute("aria-disabled") === "true") {
+    return false;
+  }
+  return true;
+}
+
+async function pickCalendarDay(when: Date): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    if (calendarHeaderShowsMonth(when)) break;
+    if (!clickPickerNextMonth()) break;
+    await waitPace("calendar");
+  }
+
+  const day = String(when.getDate());
+  const cells = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      ".el-date-table td, .d-date-table td, [class*='date-table'] td, td.available",
+    ),
+  );
+  const match =
+    cells.find((td) => {
+      if (!isCurrentMonthDayCell(td)) return false;
+      const t = (td.textContent || "").replace(/\s+/g, "").trim();
+      return t === day || t === String(Number(day));
+    }) ||
+    cells.find((td) => {
+      if (!isVisibleClickable(td)) return false;
+      if (td.classList.contains("disabled")) return false;
+      const t = (td.textContent || "").replace(/\s+/g, "").trim();
+      return t === day || t === String(Number(day));
+    });
+
+  if (match && isVisibleClickable(match)) {
+    nativePointerClick(match);
+    await waitPace("calendar");
+    return;
+  }
+
+  const available = cells.filter(
+    (td) => isCurrentMonthDayCell(td) && isVisibleClickable(td),
+  );
+  if (available.length) {
+    nativePointerClick(available[Math.floor(Math.random() * available.length)]!);
+    await waitPace("calendar");
+  }
 }
 
 /**
@@ -266,84 +966,294 @@ export async function injectImageFromUrl(
   await injectImageBlob(fileId, blob);
 }
 
-/** 优先路径：使用本地 IndexedDB 缓存的 Blob，零网络 */
-export async function injectImageBlob(
-  fileId: string,
-  blob: Blob,
-): Promise<void> {
-  if (!blob || blob.size === 0) {
-    throw new DomInjectError("INVALID_BLOB", "图片 Blob 为空或大小为 0");
-  }
-
-  const mime =
-    blob.type && blob.type.startsWith("image/")
-      ? blob.type
-      : "image/png";
-  const ext = mime.includes("jpeg") || mime.includes("jpg") ? "jpg" : "png";
-  const file = new File([blob], `${fileId}.${ext}`, { type: mime });
-
-  const fileInput = findFileInput();
-  if (!fileInput) {
-    throw new DomInjectError(
-      "ELEMENT_NOT_FOUND",
-      '未找到 input[type="file"]，请确认当前在图文发布页且上传区已渲染',
-    );
-  }
-
-  const wasDisabled = fileInput.disabled;
-  if (wasDisabled) fileInput.disabled = false;
-
-  try {
-    const dt = new DataTransfer();
-    dt.items.add(file);
-
-    Object.defineProperty(fileInput, "files", {
-      configurable: true,
-      value: dt.files,
-    });
-
-    if (!fileInput.files || fileInput.files.length === 0) {
-      try {
-        const assignable = fileInput as HTMLInputElement & {
-          files: FileList;
-        };
-        assignable.files = dt.files;
-      } catch {
-        throw new DomInjectError(
-          "FILE_INPUT_LOCKED",
-          "无法写入 file input.files（浏览器安全策略）",
-        );
-      }
-    }
-
-    if (!fileInput.files || fileInput.files.length === 0) {
-      throw new DomInjectError(
-        "FILE_INPUT_LOCKED",
-        "file input 写入后仍为空",
-      );
-    }
-
-    fileInput.dispatchEvent(new Event("input", { bubbles: true }));
-    fileInput.dispatchEvent(new Event("change", { bubbles: true }));
-  } finally {
-    if (wasDisabled) fileInput.disabled = true;
-  }
-
-  await sleep(120);
+function buildImageFiles(fileId: string, blobs: Blob[]): File[] {
+  return blobs.slice(0, 9).map((b, i) => {
+    const mime =
+      b.type && b.type.startsWith("image/") ? b.type : "image/png";
+    const ext =
+      mime.includes("jpeg") || mime.includes("jpg")
+        ? "jpg"
+        : mime.includes("webp")
+          ? "webp"
+          : "png";
+    const name =
+      blobs.length > 1 ? `${fileId}-${i + 1}.${ext}` : `${fileId}.${ext}`;
+    return new File([b], name, { type: mime });
+  });
 }
 
 /**
- * 一键填入：标题 + 正文 + 图片
- * 必须提供 imageBlob（由 Background 从 IDB / 远程拉取），Content Script 内不 fetch。
+ * 上传图片：WorkBuddy 两步法
+ * 1) 分块写入 window.__b64_i
+ * 2) 页面内 atob → File → input.upload-input.files + change
  */
-export async function fillPublishForm(params: {
+export async function injectImageBlob(
+  fileId: string,
+  blob: Blob | Blob[],
+  category?: string,
+): Promise<void> {
+  await mutePageGeolocation();
+
+  const blobs = Array.isArray(blob) ? blob : [blob];
+  if (!blobs.length || blobs.some((b) => !b || b.size === 0)) {
+    throw new DomInjectError("INVALID_BLOB", "图片 Blob 为空或大小为 0");
+  }
+  if (blobs.some((b) => b.size < 100)) {
+    throw new DomInjectError(
+      "INVALID_BLOB",
+      `图片只有 ${blobs.map((b) => b.size).join(",")} 字节，不是正常图片（常见原因：扩展消息把 ArrayBuffer 传丢了）`,
+    );
+  }
+
+  const built = buildImageFiles(fileId, blobs);
+  const files = await Promise.all(
+    built.map(async (f) => ({
+      name: f.name,
+      type: f.type || "image/png",
+      base64: arrayBufferToBase64(await f.arrayBuffer()),
+    })),
+  );
+
+  const res = await new Promise<{
+    ok: boolean;
+    error?: string;
+    count?: number;
+    bytes?: number;
+    accept?: string;
+    className?: string;
+  }>((resolve) => {
+    try {
+      chrome.runtime.sendMessage(
+        {
+          type: "INJECT_IMAGE_FILES",
+          category,
+          fileId,
+          files: category ? undefined : files,
+        },
+        (response) => {
+          void chrome.runtime.lastError;
+          resolve(
+            (response as {
+              ok: boolean;
+              error?: string;
+              count?: number;
+              bytes?: number;
+              accept?: string;
+              className?: string;
+            }) || { ok: false, error: "无响应" },
+          );
+        },
+      );
+    } catch (e) {
+      resolve({
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+
+  if (!res.ok) {
+    throw new DomInjectError(
+      res.error?.includes("input") ? "ELEMENT_NOT_FOUND" : "FILE_INPUT_LOCKED",
+      res.error || "MAIN world 注入图片失败",
+    );
+  }
+
+  console.info("[RedFlow] image input (MAIN)", {
+    accept: res.accept,
+    className: res.className,
+    count: res.count,
+    bytes: res.bytes,
+  });
+
+  const bytes = blobs.reduce((sum, b) => sum + b.size, 0);
+  await sleep(paceForImages(blobs.length, bytes));
+}
+
+/**
+ * 暂存按钮在 closed shadow 内，光 DOM 只能找到宿主 xhs-publish-btn。
+ * 扩展可用 chrome.dom.openOrClosedShadowRoot 打开 closed root。
+ */
+export function findPublishBtnHost(): HTMLElement | null {
+  const el = document.querySelector<HTMLElement>("xhs-publish-btn");
+  if (!el) return null;
+  const rect = el.getBoundingClientRect();
+  if (rect.width < 80 || rect.height < 24) return null;
+  if (el.getAttribute("save-disabled") === "true") return null;
+  return el;
+}
+
+function pickZancunInRoot(root: ParentNode): HTMLButtonElement | null {
+  const bar = root.querySelector(".publish-page-publish-btn");
+  const buttons = Array.from(
+    (bar ?? root).querySelectorAll("button"),
+  ) as HTMLButtonElement[];
+  const save = buttons.find((b) => {
+    const t = (b.textContent || "").replace(/\s+/g, "").trim();
+    return t === "暂存离开" && !b.classList.contains("bg-red");
+  });
+  return save ?? null;
+}
+
+export async function clickZancunLeave(): Promise<boolean> {
+  const host = await waitUntil(() => findPublishBtnHost(), 12000);
+  if (!host) {
+    console.warn("[RedFlow] 未找到 xhs-publish-btn 宿主");
+    return false;
+  }
+
+  const shadow = chrome.dom.openOrClosedShadowRoot(host);
+  const btn = shadow ? pickZancunInRoot(shadow) : null;
+  if (btn) {
+    btn.scrollIntoView({ block: "nearest", inline: "nearest" });
+    await waitPace("click");
+    nativePointerClick(btn);
+    btn.click();
+    console.info("[RedFlow] 已点 closed-shadow「暂存离开」");
+    await waitPace("step");
+    return true;
+  }
+
+  const main = await new Promise<{ ok?: boolean; error?: string }>((resolve) => {
+    try {
+      chrome.runtime.sendMessage(
+        { type: "MAIN_WORLD_CLICK_ZANCUN" },
+        (response) => {
+          void chrome.runtime.lastError;
+          resolve(
+            (response as { ok?: boolean; error?: string }) || {
+              ok: false,
+              error: "无响应",
+            },
+          );
+        },
+      );
+    } catch (e) {
+      resolve({
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+
+  if (main.ok) {
+    await waitPace("step");
+    return true;
+  }
+
+  console.warn("[RedFlow] 点击暂存离开失败", main.error);
+  return false;
+}
+
+export type PublishPhase = "upload" | "edit" | "unknown";
+
+export function detectPublishPhase(): PublishPhase {
+  if (findTitleInput() || findContentEditor()) return "edit";
+  if (findFileInput() || findUploadImageTab()) return "upload";
+  return "unknown";
+}
+
+/**
+ * 不刷新整页：点「上传图文 / 发布笔记」回到可灌图的落地页。
+ */
+export async function preparePublishLanding(): Promise<{
+  ok: boolean;
+  phase: PublishPhase;
+  error?: string;
+}> {
+  await mutePageGeolocation();
+  let phase = detectPublishPhase();
+
+  if (phase === "edit") {
+    const entry =
+      findVisibleByText(
+        [(t) => t === "发布笔记", (t) => t === "去发布"],
+        4,
+      ) || findUploadImageTab();
+    if (entry) {
+      nativePointerClick(entry);
+      await waitPace("nav");
+    }
+    phase = detectPublishPhase();
+  }
+
+  try {
+    await ensureImageNoteTab();
+  } catch (e) {
+    return {
+      ok: false,
+      phase: detectPublishPhase(),
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+
+  phase = detectPublishPhase();
+  if (phase === "unknown" && !findFileInput()) {
+    return {
+      ok: false,
+      phase,
+      error: "未找到「上传图文」Tab，请先打开图文发布页（不必刷新）",
+    };
+  }
+  return { ok: true, phase };
+}
+
+/** 只灌图并立刻回包。等编辑页由侧栏 PING，避免页面跳转掐断通道。 */
+export async function uploadPublishImages(params: {
   fileId: string;
+  category?: string;
+  imageBlob: Blob | Blob[];
+}): Promise<{ ok: boolean; error?: string }> {
+  await mutePageGeolocation();
+  const phase = detectPublishPhase();
+  if (phase !== "edit") {
+    const switched = await ensureImageNoteTab();
+    if (!switched && !findFileInput()) {
+      return { ok: false, error: "未找到「上传图文」，无法灌图" };
+    }
+    await waitPace("tab");
+    await primeUploadArea();
+  }
+
+  try {
+    await injectImageBlob(params.fileId, params.imageBlob, params.category);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** 编辑页：标题 / 正文 / 话题 / 合集 / 定时。不点暂存。 */
+export async function fillPublishText(params: {
   title: string;
   body: string;
-  imageBlob?: Blob;
+  collectionName?: string;
+  scheduledAt?: string;
+  topics?: string[];
 }): Promise<DomFillSteps & { ok: boolean; error?: string }> {
-  const steps: DomFillSteps = { title: false, body: false, image: false };
+  const steps: DomFillSteps = {
+    title: false,
+    body: false,
+    image: true,
+    collection: false,
+    groupChat: false,
+    topics: false,
+    scheduled: false,
+    draftSaved: false,
+  };
   const errors: string[] = [];
+  const collectionName = params.collectionName || DEFAULT_COLLECTION_NAME;
+
+  if (!(findTitleInput() || findContentEditor())) {
+    return {
+      ...steps,
+      image: false,
+      ok: false,
+      error: "还没进入编辑页（标题/正文未出现）",
+    };
+  }
+
+  await waitPace("step");
 
   try {
     await fillTitle(params.title);
@@ -352,6 +1262,8 @@ export async function fillPublishForm(params: {
     errors.push(e instanceof Error ? e.message : String(e));
   }
 
+  await waitPace("step");
+
   try {
     await fillBody(params.body);
     steps.body = true;
@@ -359,20 +1271,49 @@ export async function fillPublishForm(params: {
     errors.push(e instanceof Error ? e.message : String(e));
   }
 
-  try {
-    if (!params.imageBlob) {
-      throw new DomInjectError(
-        "INVALID_BLOB",
-        "无本地图片，请先同步仓库后再导入",
-      );
+  await waitPace("step");
+
+  if (params.topics?.length) {
+    try {
+      steps.topics = await ensureTopics(params.topics);
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : String(e));
     }
-    await injectImageBlob(params.fileId, params.imageBlob);
-    steps.image = true;
+  } else {
+    steps.topics = true;
+  }
+
+  await waitPace("menu");
+
+  try {
+    steps.collection = await selectCollection(collectionName);
+    if (!steps.collection) {
+      errors.push(`未选中合集「${collectionName}」，请手动选择`);
+    }
   } catch (e) {
     errors.push(e instanceof Error ? e.message : String(e));
   }
 
-  const ok = steps.title && steps.body && steps.image;
+  await waitPace("menu");
+
+  if (params.scheduledAt) {
+    try {
+      const when = new Date(params.scheduledAt);
+      const applied = await setScheduledPublish(when);
+      steps.scheduled = Boolean(applied);
+      steps.scheduledAt = formatXhsSchedule(applied ?? when);
+      if (!steps.scheduled) {
+        errors.push(`未写上定时「${steps.scheduledAt}」，请手动勾选定时发布`);
+      }
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  await waitPace("step");
+  await waitUntil(() => findPublishBtnHost(), 8000);
+
+  const ok = steps.title && steps.body;
   return {
     ...steps,
     ok,
@@ -380,15 +1321,125 @@ export async function fillPublishForm(params: {
   };
 }
 
-/** 等待发布页关键表单节点出现（SPA 渲染延迟） */
+/**
+ * 一键填入（同页内用）。自动化请走拆步消息，避免灌图跳转掐断通道。
+ */
+export async function fillPublishForm(params: {
+  fileId: string;
+  category?: string;
+  title: string;
+  body: string;
+  imageBlob?: Blob | Blob[];
+  collectionName?: string;
+  scheduledAt?: string;
+  topics?: string[];
+  saveDraft?: boolean;
+}): Promise<DomFillSteps & { ok: boolean; error?: string }> {
+  const hasImages = Boolean(
+    params.imageBlob &&
+      (Array.isArray(params.imageBlob)
+        ? params.imageBlob.length > 0
+        : params.imageBlob.size > 0),
+  );
+
+  await preparePublishLanding();
+
+  if (hasImages && detectPublishPhase() !== "edit") {
+    const up = await uploadPublishImages({
+      fileId: params.fileId,
+      category: params.category,
+      imageBlob: params.imageBlob!,
+    });
+    if (!up.ok) {
+      return {
+        title: false,
+        body: false,
+        image: false,
+        ok: false,
+        error: up.error,
+      };
+    }
+    const onEdit = await waitForEditFields(25000);
+    if (!onEdit) {
+      return {
+        title: false,
+        body: false,
+        image: true,
+        ok: false,
+        error:
+          "图片已注入，但页面未进入编辑态。请确认在「上传图文」页。",
+      };
+    }
+  } else if (!hasImages && detectPublishPhase() !== "edit") {
+    return {
+      title: false,
+      body: false,
+      image: false,
+      ok: false,
+      error:
+        "当前还在上传落地页且本地暂无图片。请确认 infoflow-data/Prompt/{id}.json 的 image/images 可下载。",
+    };
+  }
+
+  const filled = await fillPublishText({
+    title: params.title,
+    body: params.body,
+    collectionName: params.collectionName,
+    scheduledAt: params.scheduledAt,
+    topics: params.topics,
+  });
+
+  if (params.saveDraft !== false && filled.ok) {
+    try {
+      await waitPace("step");
+      const draftSaved = await clickZancunLeave();
+      return {
+        ...filled,
+        draftSaved,
+        error: draftSaved
+          ? filled.error
+          : [filled.error, "已填入文案，但未点到「暂存离开」"]
+              .filter(Boolean)
+              .join("；"),
+      };
+    } catch (e) {
+      return {
+        ...filled,
+        draftSaved: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
+
+  return filled;
+}
+
+/** 等待发布页关键节点（含图文上传区） */
 export async function waitForPublishForm(
   timeoutMs = 15000,
 ): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (findTitleInput() || findContentEditor() || findFileInput()) {
+    if (
+      findCreatorTab("上传图文") ||
+      findTitleInput() ||
+      findContentEditor() ||
+      findFileInput()
+    ) {
       return true;
     }
+    await sleep(300);
+  }
+  return false;
+}
+
+/** 等待标题/正文编辑区（图片上传后常需跳转） */
+export async function waitForEditFields(
+  timeoutMs = 12000,
+): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (findTitleInput() || findContentEditor()) return true;
     await sleep(300);
   }
   return false;

@@ -4,18 +4,40 @@ export interface ExtensionConfig {
   owner: string;
   repo: string;
   branch: string;
+  /**
+   * 草稿索引文件路径（相对仓库根）
+   * 默认：data/wechat_newspic_drafts.json
+   */
   basePath: string;
-  /** 英文逗号分隔，如 "ai,food,travel" */
+  /**
+   * 配图目录（相对仓库根），默认 infoflow-data/Images/Prompt。
+   * 导入时先读同级 Prompt/{id}.json 的 image/images，再按文件名取图。
+   */
+  imagesPath: string;
+  /** 保留字段；当前草稿同步不依赖分类 */
   categories: string;
+  /** 侧栏打开且发布页在时，每天自动暂存 5 篇 */
+  dailyAutoPublish: boolean;
 }
+
+/** 本地缓存使用的固定分类名（后续按 Prompt 配图仍挂在此分类下） */
+export const DRAFTS_CATEGORY = "wechat_drafts";
+
+export const DEFAULT_DRAFTS_FILE = "data/wechat_newspic_drafts.json";
+/** Prompt 元数据：infoflow-data/Prompt/{id}.json */
+export const DEFAULT_PROMPTS_PATH = "infoflow-data/Prompt";
+/** 配图：infoflow-data/Images/Prompt/{图片id}.png */
+export const DEFAULT_IMAGES_PATH = "infoflow-data/Images/Prompt";
 
 export const DEFAULT_CONFIG: ExtensionConfig = {
   githubToken: "",
-  owner: "",
-  repo: "",
-  branch: "main",
-  basePath: "infoflow-data",
+  owner: "shalom-lab",
+  repo: "InfoFlow",
+  branch: "master",
+  basePath: DEFAULT_DRAFTS_FILE,
+  imagesPath: DEFAULT_IMAGES_PATH,
   categories: "",
+  dailyAutoPublish: false,
 };
 
 /** UI 用：`owner/repo`；也接受完整 GitHub URL */
@@ -49,13 +71,12 @@ export interface UploadHistory {
   };
 }
 
-/** InfoFlow Picker JSON 字段（宽松兼容） */
-export interface InfoFlowJson {
-  content?: string;
-  notes?: string;
-  image?: string;
-  title?: string;
-  [key: string]: unknown;
+/** InfoFlow `wechat_newspic_drafts.json` 条目（只保留同步所需字段） */
+export interface WechatDraftItem {
+  id: string;
+  wechat_title: string;
+  keywords: string[];
+  reply_keyword: string;
 }
 
 export interface ContentItem {
@@ -63,6 +84,8 @@ export interface ContentItem {
   category: string;
   title: string;
   body: string;
+  keywords: string[];
+  replyKeyword: string;
   imagePath: string;
   imageRawUrl: string;
   thumbnailUrl: string;
