@@ -16,8 +16,22 @@ export interface ExtensionConfig {
   imagesPath: string;
   /** 保留字段；当前草稿同步不依赖分类 */
   categories: string;
-  /** 侧栏打开且发布页在时，每天自动暂存 5 篇 */
+  /** 侧栏打开且发布页在时，每天自动处理 5 篇 */
   dailyAutoPublish: boolean;
+  /**
+   * 提交方式：
+   * - draft：不勾选页面「定时发布」，点白色「暂存离开」存草稿
+   * - schedule：勾选并填写定时后，点红色「定时发布」
+   */
+  submitMode: "draft" | "schedule";
+  /** 定时可发时段开始小时 0–23 */
+  scheduleStartHour: number;
+  /** 定时可发时段结束小时 0–23 */
+  scheduleEndHour: number;
+  /** 最早距现在多少小时 */
+  scheduleMinLeadHours: number;
+  /** 最多提前多少天（页面日历大约 14 天） */
+  scheduleMaxAheadDays: number;
 }
 
 /** 本地缓存使用的固定分类名（后续按 Prompt 配图仍挂在此分类下） */
@@ -38,6 +52,11 @@ export const DEFAULT_CONFIG: ExtensionConfig = {
   imagesPath: DEFAULT_IMAGES_PATH,
   categories: "",
   dailyAutoPublish: false,
+  submitMode: "draft",
+  scheduleStartHour: 10,
+  scheduleEndHour: 20,
+  scheduleMinLeadHours: 2,
+  scheduleMaxAheadDays: 14,
 };
 
 /** UI 用：`owner/repo`；也接受完整 GitHub URL */

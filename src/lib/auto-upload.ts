@@ -4,13 +4,14 @@
 import { composePublishBody, listPublishTopics } from "./compose";
 import { planAllowedPublishAt } from "./schedule";
 import {
-  clickZancunOnTab,
+  clickFooterOnTab,
   fillPublishOnActiveTab,
   settleAfterZancun,
 } from "./page-bridge";
 import { sendRedFlow } from "./messages";
 import type { FillPublishPageResponse } from "@/contents/publish-bridge";
 import { waitPace } from "./pace";
+import { getConfig } from "./storage";
 
 export type DraftUploadInput = {
   category: string;
@@ -45,13 +46,15 @@ export function takeDailyBatch<T>(
 }
 
 /**
- * 封装：读 id → 拉图 → 拼正文/话题 → 填表/合集/话题 → 暂存离开 → 标记已处理
+ * 封装：读 id → 拉图 → 拼正文/话题 → 填表/合集 → 按设置暂存或定时发布 → 标记已处理
  * 不整页刷新：灌图跳转靠拆步消息 + PING 等编辑页。
  */
 export async function runDraftToXiaohongshuDraft(
   item: DraftUploadInput,
 ): Promise<DraftUploadResult> {
-  // 在侧栏预拉配图（走 extension→SW），避免 CS 长时间占着 tabs 回包通道下图
+  const cfg = await getConfig();
+  const submitMode = cfg.submitMode === "schedule" ? "schedule" : "draft";
+
   const imgs = await sendRedFlow({
     type: "GET_IMAGES",
     category: item.category,
@@ -69,8 +72,15 @@ export async function runDraftToXiaohongshuDraft(
     replyKeyword: item.replyKeyword,
   });
   const topics = listPublishTopics(item.keywords);
-  const when = planAllowedPublishAt();
-  const scheduledAt = when.toISOString();
+  const scheduledAt =
+    submitMode === "schedule"
+      ? planAllowedPublishAt(new Date(), {
+          startHour: cfg.scheduleStartHour,
+          endHour: cfg.scheduleEndHour,
+          minLeadHours: cfg.scheduleMinLeadHours,
+          maxAheadDays: cfg.scheduleMaxAheadDays,
+        }).toISOString()
+      : undefined;
 
   const result = await fillPublishOnActiveTab({
     category: item.category,
@@ -85,10 +95,20 @@ export async function runDraftToXiaohongshuDraft(
 
   if (!result.ok) return result;
 
+  if (submitMode === "schedule" && !result.steps?.scheduled) {
+    return {
+      ...result,
+      ok: false,
+      error:
+        result.error ||
+        "已勾选定时发布，但页面定时未填上，未点红色按钮（避免点成立即「发布」）",
+    };
+  }
+
   const tabId = result.tabId;
   let draftSaved = false;
   if (result.draftPending && tabId != null) {
-    draftSaved = await clickZancunOnTab(tabId);
+    draftSaved = await clickFooterOnTab(tabId, submitMode);
     if (draftSaved) await settleAfterZancun(tabId);
   } else if (tabId != null) {
     await waitPace("settle");
@@ -100,7 +120,9 @@ export async function runDraftToXiaohongshuDraft(
       ok: false,
       error:
         result.error ||
-        "未点到「暂存离开」，草稿未入库。红色「定时发布」不会点，请保持发布页打开后重试。",
+        (submitMode === "schedule"
+          ? "未点到红色「定时发布」。请确认已勾选并填好定时，红按钮文案须是「定时发布」而不是「发布」。"
+          : "未点到「暂存离开」，草稿未入库。存草稿模式不会点红色按钮。"),
       steps: {
         ...result.steps,
         title: result.steps?.title ?? false,

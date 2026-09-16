@@ -29,6 +29,7 @@ import {
   getConfig,
   getDailyAutoDate,
   localDateKey,
+  normalizeConfig,
   saveConfig,
   setDailyAutoDate,
 } from "@/lib/storage";
@@ -324,7 +325,11 @@ export function PanelApp() {
   const onImport = async (item: PanelItem) => {
     if (busyId != null || autoRunning) return;
     setBusyId(item.fileId);
-    showToast("正在处理：拉图 → 填表 → 暂存离开…");
+    showToast(
+      config.submitMode === "schedule"
+        ? "正在处理：拉图 → 填表 → 定时发布…"
+        : "正在处理：拉图 → 填表 → 暂存离开…",
+    );
     try {
       const result = await runDraftToXiaohongshuDraft({
         category: item.category,
@@ -348,8 +353,10 @@ export function PanelApp() {
           ? `，定时 ${result.steps.scheduledAt}`
           : "";
         const tip = result.steps?.draftSaved
-          ? `已暂存离开 ${item.fileId}${sched}`
-          : `已填入 ${item.fileId}${sched}（请确认暂存离开）`;
+          ? result.steps?.scheduledAt
+            ? `已定时发布 ${item.fileId}${sched}`
+            : `已暂存离开 ${item.fileId}`
+          : `已填入 ${item.fileId}${sched}（请确认底部按钮）`;
         if (result.error) {
           showError(`${tip}；附带警告：${result.error}`);
         } else {
@@ -503,6 +510,16 @@ export function PanelApp() {
     showToast("将在本批 5 篇结束后暂停");
   };
 
+  const persistSettingsPatch = (patch: Partial<ExtensionConfig>) => {
+    setSettingsForm((prev) => {
+      const next = normalizeConfig({ ...prev, ...patch });
+      skipConfigReloadRef.current = true;
+      void saveConfig(next).then(() => setConfig(next));
+      return next;
+    });
+    setSettingsMsg(null);
+  };
+
   const onSettingsChange =
     (key: keyof ExtensionConfig) =>
     (e: ChangeEvent<HTMLInputElement>) => {
@@ -534,6 +551,12 @@ export function PanelApp() {
           DEFAULT_IMAGES_PATH,
         categories: settingsForm.categories.trim(),
         dailyAutoPublish: Boolean(settingsForm.dailyAutoPublish),
+        submitMode:
+          settingsForm.submitMode === "schedule" ? "schedule" : "draft",
+        scheduleStartHour: settingsForm.scheduleStartHour,
+        scheduleEndHour: settingsForm.scheduleEndHour,
+        scheduleMinLeadHours: settingsForm.scheduleMinLeadHours,
+        scheduleMaxAheadDays: settingsForm.scheduleMaxAheadDays,
       };
 
       skipConfigReloadRef.current = true;
@@ -1014,6 +1037,117 @@ export function PanelApp() {
             />
           </label>
 
+          <label className="redflow-label">提交方式</label>
+          <div className="redflow-mode-row">
+            <label
+              className={`redflow-mode-card${
+                settingsForm.submitMode !== "schedule" ? " is-on" : ""
+              }`}
+            >
+              <input
+                type="radio"
+                name="submitMode"
+                checked={settingsForm.submitMode !== "schedule"}
+                onChange={() => persistSettingsPatch({ submitMode: "draft" })}
+              />
+              <span>
+                <strong>存草稿</strong>
+                不勾选定时，点白色「暂存离开」
+              </span>
+            </label>
+            <label
+              className={`redflow-mode-card${
+                settingsForm.submitMode === "schedule" ? " is-on" : ""
+              }`}
+            >
+              <input
+                type="radio"
+                name="submitMode"
+                checked={settingsForm.submitMode === "schedule"}
+                onChange={() => persistSettingsPatch({ submitMode: "schedule" })}
+              />
+              <span>
+                <strong>定时发布</strong>
+                勾选定时并填时间，点红色「定时发布」
+              </span>
+            </label>
+          </div>
+          {settingsForm.submitMode === "schedule" ? (
+            <div className="redflow-schedule-box">
+              <p className="redflow-settings-hint">
+                勾选定时后必须填写这些项。时间在区间内随机，不会点立即「发布」。
+              </p>
+              <div className="redflow-settings-row">
+                <label className="redflow-label">
+                  可发开始（时）
+                  <input
+                    className="redflow-input"
+                    type="number"
+                    min={0}
+                    max={23}
+                    value={settingsForm.scheduleStartHour}
+                    onChange={(e) =>
+                      persistSettingsPatch({
+                        scheduleStartHour: Number(e.target.value),
+                      })
+                    }
+                  />
+                </label>
+                <label className="redflow-label">
+                  可发结束（时）
+                  <input
+                    className="redflow-input"
+                    type="number"
+                    min={0}
+                    max={23}
+                    value={settingsForm.scheduleEndHour}
+                    onChange={(e) =>
+                      persistSettingsPatch({
+                        scheduleEndHour: Number(e.target.value),
+                      })
+                    }
+                  />
+                </label>
+              </div>
+              <div className="redflow-settings-row">
+                <label className="redflow-label">
+                  最早间隔（小时）
+                  <input
+                    className="redflow-input"
+                    type="number"
+                    min={1}
+                    max={48}
+                    value={settingsForm.scheduleMinLeadHours}
+                    onChange={(e) =>
+                      persistSettingsPatch({
+                        scheduleMinLeadHours: Number(e.target.value),
+                      })
+                    }
+                  />
+                </label>
+                <label className="redflow-label">
+                  最多提前（天）
+                  <input
+                    className="redflow-input"
+                    type="number"
+                    min={1}
+                    max={14}
+                    value={settingsForm.scheduleMaxAheadDays}
+                    onChange={(e) =>
+                      persistSettingsPatch({
+                        scheduleMaxAheadDays: Number(e.target.value),
+                      })
+                    }
+                  />
+                </label>
+              </div>
+            </div>
+          ) : (
+            <p className="redflow-settings-hint">
+              页面上不会勾选「定时发布」，只把笔记存成创作者草稿。
+            </p>
+          )}
+
           <label className="redflow-toggle">
             <input
               type="checkbox"
@@ -1036,8 +1170,8 @@ export function PanelApp() {
             <span>每天自动发布 5 篇</span>
           </label>
           <p className="redflow-settings-hint">
-            侧栏开着、并且已经打开小红书发布页时，自动暂存今天的 5
-            篇，完成后停止。与「开始自动化」、手动导入同一套逻辑，不会同时跑。
+            侧栏开着、并且已经打开小红书发布页时，按上面的提交方式自动处理今天的
+            5 篇，完成后停止。与「开始自动化」、手动导入同一套逻辑，不会同时跑。
           </p>
 
           <p className="redflow-perm-line">

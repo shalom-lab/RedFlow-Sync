@@ -111,7 +111,7 @@ chrome.runtime.onMessage.addListener(
     message:
       | RedFlowRequest
       | { type: "MUTE_GEOLOCATION" }
-      | { type: "MAIN_WORLD_CLICK_ZANCUN" }
+      | { type: "MAIN_WORLD_CLICK_ZANCUN"; kind?: "draft" | "schedule" }
       | {
           type: "MAIN_WORLD_SELECT";
           kind: "collection" | "groupChat";
@@ -236,6 +236,7 @@ chrome.runtime.onMessage.addListener(
             target: { tabId },
             world: "MAIN",
             func: clickZancunLeaveInMainWorld,
+            args: [message.kind === "schedule" ? "schedule" : "draft"],
           });
           sendResponse(result ?? { ok: false, error: "MAIN 暂存点击无返回" });
         } catch (e) {

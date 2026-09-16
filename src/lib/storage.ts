@@ -4,18 +4,19 @@ import {
   type UploadHistory,
 } from "@/types";
 import { itemKey } from "./keys";
+import { normalizeSchedulePlan } from "./schedule";
 
 const CONFIG_KEY = "redflow_config";
 const HISTORY_KEY = "redflow_upload_history";
 const DAILY_AUTO_DATE_KEY = "redflow_daily_auto_date";
 
-export async function getConfig(): Promise<ExtensionConfig> {
-  const result = await chrome.storage.local.get(CONFIG_KEY);
+export function normalizeConfig(
+  raw?: Partial<ExtensionConfig> | null,
+): ExtensionConfig {
   const merged: ExtensionConfig = {
     ...DEFAULT_CONFIG,
-    ...(result[CONFIG_KEY] as ExtensionConfig | undefined),
+    ...raw,
   };
-  // 旧配置可能存了空 basePath，回落到默认草稿文件
   if (!merged.basePath?.trim()) {
     merged.basePath = DEFAULT_CONFIG.basePath;
   }
@@ -30,16 +31,27 @@ export async function getConfig(): Promise<ExtensionConfig> {
   if (!merged.repo?.trim()) merged.repo = DEFAULT_CONFIG.repo;
   if (!merged.branch?.trim()) merged.branch = DEFAULT_CONFIG.branch;
   merged.dailyAutoPublish = Boolean(merged.dailyAutoPublish);
+  merged.submitMode = merged.submitMode === "schedule" ? "schedule" : "draft";
+  const plan = normalizeSchedulePlan({
+    startHour: merged.scheduleStartHour,
+    endHour: merged.scheduleEndHour,
+    minLeadHours: merged.scheduleMinLeadHours,
+    maxAheadDays: merged.scheduleMaxAheadDays,
+  });
+  merged.scheduleStartHour = plan.startHour;
+  merged.scheduleEndHour = plan.endHour;
+  merged.scheduleMinLeadHours = plan.minLeadHours;
+  merged.scheduleMaxAheadDays = plan.maxAheadDays;
   return merged;
 }
 
+export async function getConfig(): Promise<ExtensionConfig> {
+  const result = await chrome.storage.local.get(CONFIG_KEY);
+  return normalizeConfig(result[CONFIG_KEY] as ExtensionConfig | undefined);
+}
+
 export async function saveConfig(config: ExtensionConfig): Promise<void> {
-  const normalized: ExtensionConfig = {
-    ...config,
-    basePath: config.basePath.trim() || DEFAULT_CONFIG.basePath,
-    imagesPath: (config.imagesPath ?? "").trim() || DEFAULT_CONFIG.imagesPath,
-    dailyAutoPublish: Boolean(config.dailyAutoPublish),
-  };
+  const normalized = normalizeConfig(config);
   await chrome.storage.local.set({ [CONFIG_KEY]: normalized });
 }
 

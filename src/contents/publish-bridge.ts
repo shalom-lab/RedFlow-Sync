@@ -6,7 +6,7 @@
  * 灌图后页面常会跳到编辑态；同一次 tabs 消息里死等会掐断通道。
  */
 import {
-  clickZancunLeave,
+  clickPublishFooter,
   detectPublishPhase,
   fillPublishText,
   preparePublishLanding,
@@ -55,7 +55,7 @@ export type FillPublishPageResponse = {
     scheduledAt?: string;
   };
   hadImage?: boolean;
-  /** 填表成功，侧栏应另发 CLICK_ZANCUN */
+  /** 填表成功，侧栏应另发 CLICK_FOOTER */
   draftPending?: boolean;
 };
 
@@ -193,18 +193,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (type === "CLICK_ZANCUN") {
-    void clickZancunLeave()
+  if (type === "CLICK_FOOTER" || type === "CLICK_ZANCUN") {
+    const kind =
+      type === "CLICK_FOOTER" &&
+      (message as { kind?: string }).kind === "schedule"
+        ? "schedule"
+        : "draft";
+    void clickPublishFooter(kind)
       .then((ok) => {
         try {
-          sendResponse({ ok, started: true });
+          sendResponse({ ok, started: true, kind });
         } catch {
           /* 点完后页面可能已跳转，通道关掉视为已点到 */
         }
       })
       .catch((e) => {
         if (!isChannelGoneError(e)) {
-          console.warn("[RedFlow] 暂存离开点击失败", e);
+          console.warn("[RedFlow] 底部按钮点击失败", e);
         }
         try {
           sendResponse({

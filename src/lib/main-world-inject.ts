@@ -330,6 +330,8 @@ export async function selectPublishMenuInMainWorld(
   return { ok: false, error: "已点合集项但按钮文案未变", selected: selectedText() };
 }
 
+export type FooterClickKind = "draft" | "schedule";
+
 export type MainWorldZancunResult = {
   ok: boolean;
   error?: string;
@@ -338,22 +340,26 @@ export type MainWorldZancunResult = {
 };
 
 /**
- * 暂存/定时按钮在 xhs-publish-btn 的 closed shadow 里，querySelector 看不见。
- * 宿主可查：save-text=暂存离开，submit-text=定时发布。
- * 内层 flex 居中：白按钮 120px + gap 24 + 红按钮 120px。
- * 用 elementFromPoint 打进 shadow，只点「暂存离开」。
+ * 按钮在 xhs-publish-btn 的 closed shadow 里。
+ * draft：点白色「暂存离开」；schedule：点红色「定时发布」（文案必须是定时发布，绝不点「发布」）。
  */
-export async function clickZancunLeaveInMainWorld(): Promise<MainWorldZancunResult> {
+export async function clickZancunLeaveInMainWorld(
+  kind: FooterClickKind = "draft",
+): Promise<MainWorldZancunResult> {
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
   const norm = (s: string) => s.replace(/\s+/g, "").trim();
+  const wantSchedule = kind === "schedule";
 
-  const isForbidden = (el: Element | null) => {
-    if (!el) return true;
+  const isHit = (el: Element | null) => {
+    if (!el) return false;
     const t = norm(el.textContent || "");
     const cls = String((el as HTMLElement).className || "");
-    if (cls.includes("bg-red")) return true;
-    if (t === "定时发布" || t === "发布") return true;
-    return false;
+    if (wantSchedule) {
+      return cls.includes("bg-red") && t === "定时发布";
+    }
+    if (cls.includes("bg-red")) return false;
+    if (t === "定时发布" || t === "发布") return false;
+    return t === "暂存离开";
   };
 
   const fireAt = (el: HTMLElement, x: number, y: number) => {
@@ -397,17 +403,39 @@ export async function clickZancunLeaveInMainWorld(): Promise<MainWorldZancunResu
     host = document.querySelector("xhs-publish-btn");
     if (host) {
       const r = host.getBoundingClientRect();
-      const saveOff = host.getAttribute("save-disabled") === "true";
-      if (!saveOff && r.width >= 80 && r.height >= 24) break;
+      const blocked = wantSchedule
+        ? host.getAttribute("submit-disabled") === "true"
+        : host.getAttribute("save-disabled") === "true";
+      const submitText = host.getAttribute("submit-text") || "";
+      const ready =
+        !blocked &&
+        r.width >= 80 &&
+        r.height >= 24 &&
+        (!wantSchedule || submitText.includes("定时"));
+      if (ready) break;
       host = null;
     }
     await sleep(150);
   }
-  if (!host) return { ok: false, error: "未找到 xhs-publish-btn" };
+  if (!host) {
+    return {
+      ok: false,
+      error: wantSchedule
+        ? "未找到可点的红色「定时发布」（请确认已勾选并填好定时）"
+        : "未找到 xhs-publish-btn",
+    };
+  }
 
-  const saveText = host.getAttribute("save-text") || "";
-  if (saveText && !saveText.includes("暂存")) {
-    return { ok: false, error: `save-text 不是暂存离开：${saveText}` };
+  if (wantSchedule) {
+    const submitText = host.getAttribute("submit-text") || "";
+    if (!submitText.includes("定时")) {
+      return { ok: false, error: `红按钮是「${submitText || "发布"}」，未点，避免立即发布` };
+    }
+  } else {
+    const saveText = host.getAttribute("save-text") || "";
+    if (saveText && !saveText.includes("暂存")) {
+      return { ok: false, error: `save-text 不是暂存离开：${saveText}` };
+    }
   }
 
   host.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -417,35 +445,29 @@ export async function clickZancunLeaveInMainWorld(): Promise<MainWorldZancunResu
   const groupW = 120 + 24 + 120;
   const groupLeft = rect.left + (rect.width - groupW) / 2;
   const y = rect.top + rect.height / 2;
-  const xs = [groupLeft + 60, groupLeft + 40, groupLeft + 80, rect.left + rect.width / 2 - 72];
+  const xs = wantSchedule
+    ? [groupLeft + 204, groupLeft + 184, groupLeft + 224, rect.left + rect.width / 2 + 72]
+    : [groupLeft + 60, groupLeft + 40, groupLeft + 80, rect.left + rect.width / 2 - 72];
 
   for (const x of xs) {
     const stack = document.elementsFromPoint(x, y);
-    const hit =
-      stack.find((el) => {
-        const t = norm(el.textContent || "");
-        return el.tagName === "BUTTON" && t === "暂存离开";
-      }) ||
-      stack.find((el) => {
-        const t = norm(el.textContent || "");
-        return t === "暂存离开" && !isForbidden(el);
-      });
-    if (!hit || isForbidden(hit)) continue;
+    const hit = stack.find((el) => isHit(el));
+    if (!hit) continue;
     fireAt(hit as HTMLElement, x, y);
-    console.info("[RedFlow] 已点暂存离开", {
+    const text = norm(hit.textContent || "");
+    console.info("[RedFlow] 已点底部按钮", {
+      kind,
       tag: hit.tagName,
-      text: norm(hit.textContent || ""),
+      text,
       cls: String((hit as HTMLElement).className || "").slice(0, 80),
     });
-    return {
-      ok: true,
-      text: norm(hit.textContent || ""),
-      tag: hit.tagName,
-    };
+    return { ok: true, text, tag: hit.tagName };
   }
 
   return {
     ok: false,
-    error: "坐标未打到白色「暂存离开」（closed shadow）。请确认按钮已出现且未被挡住",
+    error: wantSchedule
+      ? "坐标未打到红色「定时发布」。未勾选定时时红按钮是「发布」，不会点。"
+      : "坐标未打到白色「暂存离开」（closed shadow）",
   };
 }

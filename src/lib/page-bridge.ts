@@ -230,19 +230,24 @@ export async function fillPublishOnActiveTab(
   return { ...filled, tabId };
 }
 
-/**
- * 填表成功后由侧栏单独触发。点击后页面常会跳转/进 bfcache，
- * 因此通道关闭视为「已点到」，不报失败。
- */
-export async function clickZancunOnTab(tabId: number): Promise<boolean> {
+export async function clickFooterOnTab(
+  tabId: number,
+  kind: "draft" | "schedule" = "draft",
+): Promise<boolean> {
   try {
     const res = (await chrome.tabs.sendMessage(tabId, {
-      type: "CLICK_ZANCUN",
+      type: "CLICK_FOOTER",
+      kind,
     })) as { ok?: boolean } | undefined;
     return Boolean(res?.ok);
   } catch (e) {
     if (isPortClosedError(e)) return true;
-    console.warn("[RedFlow] CLICK_ZANCUN", e);
+    console.warn("[RedFlow] CLICK_FOOTER", e);
     return false;
   }
+}
+
+/** @deprecated 使用 clickFooterOnTab(tabId, "draft") */
+export async function clickZancunOnTab(tabId: number): Promise<boolean> {
+  return clickFooterOnTab(tabId, "draft");
 }

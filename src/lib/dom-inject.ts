@@ -727,16 +727,8 @@ export async function selectCollection(
   return collectionSelectedName().includes(target);
 }
 
-/**
- * 勾选「定时发布」，把日期写进小红书允许范围内的日历（可能不是今天）。
- * 不点击红色「发布 / 定时发布」提交按钮。
- * 返回页面上实际生效的时间；失败返回 null。
- */
-export async function setScheduledPublish(when: Date): Promise<Date | null> {
-  const text = formatXhsSchedule(when);
-  await expandMoreSettings();
-
-  const toggle =
+function findScheduleToggle(): HTMLElement | null {
+  return (
     findVisibleByText(
       [
         (t) => t === "定时发布",
@@ -746,20 +738,54 @@ export async function setScheduledPublish(when: Date): Promise<Date | null> {
     ) ||
     document.querySelector<HTMLElement>(
       ".schedule-checkbox, .el-switch, [class*='schedule']",
-    );
+    )
+  );
+}
+
+function scheduleSwitchEl(toggle: HTMLElement): HTMLElement {
+  const row = toggle.closest<HTMLElement>("div") || toggle;
+  return (
+    row.querySelector<HTMLElement>(
+      ".d-switch, .el-switch, [role='switch'], input[type='checkbox']",
+    ) || toggle
+  );
+}
+
+function isSwitchOn(sw: HTMLElement): boolean {
+  return (
+    sw.classList.contains("is-checked") ||
+    sw.classList.contains("is-active") ||
+    (sw instanceof HTMLInputElement && sw.checked) ||
+    sw.getAttribute("aria-checked") === "true"
+  );
+}
+
+/** 存草稿时关掉定时，避免红按钮变成「定时发布」或误带定时。 */
+export async function clearScheduledPublish(): Promise<void> {
+  await expandMoreSettings();
+  const toggle = findScheduleToggle();
+  if (!toggle) return;
+  const sw = scheduleSwitchEl(toggle);
+  if (isSwitchOn(sw)) {
+    nativePointerClick(sw);
+    await waitPace("menu");
+  }
+}
+
+/**
+ * 勾选「定时发布」，把日期写进小红书允许范围内的日历（可能不是今天）。
+ * 不点击红色「发布 / 定时发布」提交按钮。
+ * 返回页面上实际生效的时间；失败返回 null。
+ */
+export async function setScheduledPublish(when: Date): Promise<Date | null> {
+  const text = formatXhsSchedule(when);
+  await expandMoreSettings();
+
+  const toggle = findScheduleToggle();
 
   if (toggle) {
-    const row = toggle.closest<HTMLElement>("div") || toggle;
-    const sw =
-      row.querySelector<HTMLElement>(
-        ".d-switch, .el-switch, [role='switch'], input[type='checkbox']",
-      ) || toggle;
-    const alreadyOn =
-      sw.classList.contains("is-checked") ||
-      sw.classList.contains("is-active") ||
-      (sw instanceof HTMLInputElement && sw.checked) ||
-      sw.getAttribute("aria-checked") === "true";
-    if (!alreadyOn) {
+    const sw = scheduleSwitchEl(toggle);
+    if (!isSwitchOn(sw)) {
       nativePointerClick(sw);
       await waitPace("menu");
     }
@@ -1071,7 +1097,7 @@ export async function injectImageBlob(
 }
 
 /**
- * 暂存按钮在 closed shadow 内，光 DOM 只能找到宿主 xhs-publish-btn。
+ * 底部按钮在 closed shadow 内，光 DOM 只能找到宿主 xhs-publish-btn。
  * 扩展可用 chrome.dom.openOrClosedShadowRoot 打开 closed root。
  */
 export function findPublishBtnHost(): HTMLElement | null {
@@ -1079,37 +1105,69 @@ export function findPublishBtnHost(): HTMLElement | null {
   if (!el) return null;
   const rect = el.getBoundingClientRect();
   if (rect.width < 80 || rect.height < 24) return null;
-  if (el.getAttribute("save-disabled") === "true") return null;
   return el;
 }
 
-function pickZancunInRoot(root: ParentNode): HTMLButtonElement | null {
+function pickFooterButton(
+  root: ParentNode,
+  kind: "draft" | "schedule",
+): HTMLButtonElement | null {
   const bar = root.querySelector(".publish-page-publish-btn");
   const buttons = Array.from(
     (bar ?? root).querySelectorAll("button"),
   ) as HTMLButtonElement[];
-  const save = buttons.find((b) => {
-    const t = (b.textContent || "").replace(/\s+/g, "").trim();
-    return t === "暂存离开" && !b.classList.contains("bg-red");
-  });
-  return save ?? null;
+  if (kind === "schedule") {
+    return (
+      buttons.find((b) => {
+        const t = (b.textContent || "").replace(/\s+/g, "").trim();
+        return b.classList.contains("bg-red") && t === "定时发布";
+      }) ?? null
+    );
+  }
+  return (
+    buttons.find((b) => {
+      const t = (b.textContent || "").replace(/\s+/g, "").trim();
+      return t === "暂存离开" && !b.classList.contains("bg-red");
+    }) ?? null
+  );
 }
 
-export async function clickZancunLeave(): Promise<boolean> {
-  const host = await waitUntil(() => findPublishBtnHost(), 12000);
+export async function clickPublishFooter(
+  kind: "draft" | "schedule" = "draft",
+): Promise<boolean> {
+  const host = await waitUntil(() => {
+    const el = findPublishBtnHost();
+    if (!el) return null;
+    if (kind === "schedule") {
+      if (el.getAttribute("submit-disabled") === "true") return null;
+      const submit = el.getAttribute("submit-text") || "";
+      if (!submit.includes("定时")) return null;
+    } else if (el.getAttribute("save-disabled") === "true") {
+      return null;
+    }
+    return el;
+  }, 12000);
   if (!host) {
-    console.warn("[RedFlow] 未找到 xhs-publish-btn 宿主");
+    console.warn(
+      kind === "schedule"
+        ? "[RedFlow] 未找到可点的红色「定时发布」"
+        : "[RedFlow] 未找到 xhs-publish-btn 宿主",
+    );
     return false;
   }
 
   const shadow = chrome.dom.openOrClosedShadowRoot(host);
-  const btn = shadow ? pickZancunInRoot(shadow) : null;
+  const btn = shadow ? pickFooterButton(shadow, kind) : null;
   if (btn) {
     btn.scrollIntoView({ block: "nearest", inline: "nearest" });
     await waitPace("click");
     nativePointerClick(btn);
     btn.click();
-    console.info("[RedFlow] 已点 closed-shadow「暂存离开」");
+    console.info(
+      kind === "schedule"
+        ? "[RedFlow] 已点 closed-shadow「定时发布」"
+        : "[RedFlow] 已点 closed-shadow「暂存离开」",
+    );
     await waitPace("step");
     return true;
   }
@@ -1117,7 +1175,7 @@ export async function clickZancunLeave(): Promise<boolean> {
   const main = await new Promise<{ ok?: boolean; error?: string }>((resolve) => {
     try {
       chrome.runtime.sendMessage(
-        { type: "MAIN_WORLD_CLICK_ZANCUN" },
+        { type: "MAIN_WORLD_CLICK_ZANCUN", kind },
         (response) => {
           void chrome.runtime.lastError;
           resolve(
@@ -1141,8 +1199,13 @@ export async function clickZancunLeave(): Promise<boolean> {
     return true;
   }
 
-  console.warn("[RedFlow] 点击暂存离开失败", main.error);
+  console.warn("[RedFlow] 点击底部按钮失败", kind, main.error);
   return false;
+}
+
+/** @deprecated 使用 clickPublishFooter("draft") */
+export async function clickZancunLeave(): Promise<boolean> {
+  return clickPublishFooter("draft");
 }
 
 export type PublishPhase = "upload" | "edit" | "unknown";
@@ -1307,6 +1370,12 @@ export async function fillPublishText(params: {
       }
     } catch (e) {
       errors.push(e instanceof Error ? e.message : String(e));
+    }
+  } else {
+    try {
+      await clearScheduledPublish();
+    } catch {
+      /* 关掉定时失败不阻断存草稿 */
     }
   }
 

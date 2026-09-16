@@ -240,6 +240,53 @@
   accent-color: var(--rf-accent);
 }
 
+.redflow-mode-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.redflow-mode-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 10px 9px;
+  border: 1px solid var(--rf-line);
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  color: var(--rf-ink);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.redflow-mode-card strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.redflow-mode-card input {
+  margin-top: 2px;
+  accent-color: var(--rf-accent);
+}
+
+.redflow-mode-card.is-on {
+  border-color: #fecdd3;
+  background: #fff7f8;
+}
+
+.redflow-schedule-box {
+  margin: 0 0 10px;
+  padding: 10px;
+  border: 1px solid #fecdd3;
+  border-radius: 12px;
+  background: #fff7f8;
+}
+
 .redflow-wipe-confirm {
   padding: 10px;
   border: 1px solid #e7e5e4;
