@@ -1,3 +1,27 @@
+/** 自动化各步停顿种类（毫秒） */
+export type PaceKind =
+  | "click"
+  | "tab"
+  | "nav"
+  | "step"
+  | "menu"
+  | "calendar"
+  | "settle"
+  | "betweenDrafts";
+
+export type PaceConfig = Record<PaceKind, number>;
+
+export const DEFAULT_PACE_MS: PaceConfig = {
+  click: 420,
+  tab: 1100,
+  nav: 1500,
+  step: 750,
+  menu: 950,
+  calendar: 700,
+  settle: 3400,
+  betweenDrafts: 2600,
+};
+
 /** GitHub / 插件配置（Options / Popup 持久化） */
 export interface ExtensionConfig {
   githubToken: string;
@@ -32,6 +56,8 @@ export interface ExtensionConfig {
   scheduleMinLeadHours: number;
   /** 最多提前多少天（页面日历大约 14 天） */
   scheduleMaxAheadDays: number;
+  /** 各步停顿（毫秒），默认见 DEFAULT_PACE_MS */
+  pace: PaceConfig;
 }
 
 /** 本地缓存使用的固定分类名（后续按 Prompt 配图仍挂在此分类下） */
@@ -57,6 +83,7 @@ export const DEFAULT_CONFIG: ExtensionConfig = {
   scheduleEndHour: 20,
   scheduleMinLeadHours: 2,
   scheduleMaxAheadDays: 14,
+  pace: { ...DEFAULT_PACE_MS },
 };
 
 /** UI 用：`owner/repo`；也接受完整 GitHub URL */

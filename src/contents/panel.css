@@ -316,7 +316,105 @@
   padding: 10px 12px 12px;
   display: flex;
   flex-direction: column;
+  gap: 10px;
+}
+
+.redflow-settings-section {
+  padding: 12px;
+  border: 1px solid var(--rf-line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+}
+
+.redflow-settings-section-danger {
+  border-color: #fecaca;
+  background: #fffbfb;
+}
+
+.redflow-settings-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--rf-ink);
+}
+
+.redflow-settings-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.redflow-pace-presets {
+  display: flex;
+  gap: 6px;
+}
+
+.redflow-pace-preset {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--rf-line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--rf-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.redflow-pace-preset:hover {
+  border-color: #fda4af;
+  color: var(--rf-accent);
+}
+
+.redflow-pace-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.redflow-pace-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.redflow-pace-label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--rf-ink);
+}
+
+.redflow-pace-hint {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--rf-muted);
+}
+
+.redflow-pace-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.redflow-input-pace {
+  margin-top: 0;
+  height: 32px;
+  padding-right: 6px;
+}
+
+.redflow-pace-unit {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--rf-muted);
 }
 
 .redflow-settings-hint {

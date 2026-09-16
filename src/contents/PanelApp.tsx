@@ -36,6 +36,13 @@ import {
 import { hasGitHubAccess, requestGitHubAccess } from "@/lib/permissions";
 import { hasPublishTabOpen } from "@/lib/page-bridge";
 import { base64ToBlob } from "@/lib/base64";
+import {
+  DEFAULT_PACE_MS,
+  normalizePace,
+  PACE_FIELDS,
+  PACE_PRESETS,
+  type PaceKind,
+} from "@/lib/pace";
 
 type TabId = "main" | "history" | "settings";
 
@@ -520,6 +527,19 @@ export function PanelApp() {
     setSettingsMsg(null);
   };
 
+  const persistPaceField = (key: PaceKind, raw: string) => {
+    persistSettingsPatch({
+      pace: normalizePace({
+        ...settingsForm.pace,
+        [key]: Number(raw),
+      }),
+    });
+  };
+
+  const applyPacePreset = (pace: typeof DEFAULT_PACE_MS) => {
+    persistSettingsPatch({ pace: normalizePace(pace) });
+  };
+
   const onSettingsChange =
     (key: keyof ExtensionConfig) =>
     (e: ChangeEvent<HTMLInputElement>) => {
@@ -557,6 +577,7 @@ export function PanelApp() {
         scheduleEndHour: settingsForm.scheduleEndHour,
         scheduleMinLeadHours: settingsForm.scheduleMinLeadHours,
         scheduleMaxAheadDays: settingsForm.scheduleMaxAheadDays,
+        pace: normalizePace(settingsForm.pace),
       };
 
       skipConfigReloadRef.current = true;
@@ -971,213 +992,266 @@ export function PanelApp() {
           className="redflow-settings"
           onSubmit={(e) => void onSaveSettings(e)}
         >
-          <p className="redflow-settings-hint">
-            同步只拉草稿索引；点「导入」时按 id 读{" "}
-            <code>{DEFAULT_PROMPTS_PATH}/&#123;id&#125;.json</code> 的{" "}
-            <code>image</code>（首图）与 <code>images</code>
-            ，取出文件名 id 后下载{" "}
-            <code>{DEFAULT_IMAGES_PATH}/&#123;图片id&#125;.png</code>
-            ，配图会留在本机 IndexedDB，可在「历史」里点开查看。
-          </p>
+          <section className="redflow-settings-section">
+            <h3 className="redflow-settings-title">GitHub 数据源</h3>
+            <p className="redflow-settings-hint">
+              同步只拉草稿索引；导入时再读{" "}
+              <code>{DEFAULT_PROMPTS_PATH}/&#123;id&#125;.json</code> 与配图目录。
+            </p>
 
-          <label className="redflow-label">
-            GitHub 令牌
-            <input
-              className="redflow-input"
-              type="password"
-              autoComplete="off"
-              placeholder="私有仓必填 ghp_..."
-              value={settingsForm.githubToken}
-              onChange={onSettingsChange("githubToken")}
-            />
-          </label>
-
-          <label className="redflow-label">
-            仓库（owner/repo）
-            <input
-              className="redflow-input"
-              required
-              placeholder="shalom-lab/InfoFlow"
-              value={settingsRepoSlug}
-              onChange={(e) => {
-                setSettingsRepoSlug(e.target.value);
-                setSettingsMsg(null);
-              }}
-            />
-          </label>
-
-          <div className="redflow-settings-row">
             <label className="redflow-label">
-              分支
+              GitHub 令牌
               <input
                 className="redflow-input"
-                placeholder="master"
-                value={settingsForm.branch}
-                onChange={onSettingsChange("branch")}
+                type="password"
+                autoComplete="off"
+                placeholder="私有仓必填 ghp_..."
+                value={settingsForm.githubToken}
+                onChange={onSettingsChange("githubToken")}
               />
             </label>
+
             <label className="redflow-label">
-              草稿索引文件
+              仓库（owner/repo）
               <input
                 className="redflow-input"
-                placeholder={DEFAULT_DRAFTS_FILE}
-                value={settingsForm.basePath}
-                onChange={onSettingsChange("basePath")}
+                required
+                placeholder="shalom-lab/InfoFlow"
+                value={settingsRepoSlug}
+                onChange={(e) => {
+                  setSettingsRepoSlug(e.target.value);
+                  setSettingsMsg(null);
+                }}
               />
             </label>
-          </div>
 
-          <label className="redflow-label">
-            图片目录
-            <input
-              className="redflow-input"
-              placeholder={DEFAULT_IMAGES_PATH}
-              value={settingsForm.imagesPath}
-              onChange={onSettingsChange("imagesPath")}
-            />
-          </label>
+            <div className="redflow-settings-row">
+              <label className="redflow-label">
+                分支
+                <input
+                  className="redflow-input"
+                  placeholder="master"
+                  value={settingsForm.branch}
+                  onChange={onSettingsChange("branch")}
+                />
+              </label>
+              <label className="redflow-label">
+                草稿索引文件
+                <input
+                  className="redflow-input"
+                  placeholder={DEFAULT_DRAFTS_FILE}
+                  value={settingsForm.basePath}
+                  onChange={onSettingsChange("basePath")}
+                />
+              </label>
+            </div>
 
-          <label className="redflow-label">提交方式</label>
-          <div className="redflow-mode-row">
-            <label
-              className={`redflow-mode-card${
-                settingsForm.submitMode !== "schedule" ? " is-on" : ""
-              }`}
-            >
+            <label className="redflow-label">
+              图片目录
               <input
-                type="radio"
-                name="submitMode"
-                checked={settingsForm.submitMode !== "schedule"}
-                onChange={() => persistSettingsPatch({ submitMode: "draft" })}
+                className="redflow-input"
+                placeholder={DEFAULT_IMAGES_PATH}
+                value={settingsForm.imagesPath}
+                onChange={onSettingsChange("imagesPath")}
               />
-              <span>
-                <strong>存草稿</strong>
-                不勾选定时，点白色「暂存离开」
-              </span>
             </label>
-            <label
-              className={`redflow-mode-card${
-                settingsForm.submitMode === "schedule" ? " is-on" : ""
-              }`}
-            >
-              <input
-                type="radio"
-                name="submitMode"
-                checked={settingsForm.submitMode === "schedule"}
-                onChange={() => persistSettingsPatch({ submitMode: "schedule" })}
-              />
-              <span>
-                <strong>定时发布</strong>
-                勾选定时并填时间，点红色「定时发布」
-              </span>
-            </label>
-          </div>
-          {settingsForm.submitMode === "schedule" ? (
-            <div className="redflow-schedule-box">
-              <p className="redflow-settings-hint">
-                勾选定时后必须填写这些项。时间在区间内随机，不会点立即「发布」。
-              </p>
-              <div className="redflow-settings-row">
-                <label className="redflow-label">
-                  可发开始（时）
-                  <input
-                    className="redflow-input"
-                    type="number"
-                    min={0}
-                    max={23}
-                    value={settingsForm.scheduleStartHour}
-                    onChange={(e) =>
-                      persistSettingsPatch({
-                        scheduleStartHour: Number(e.target.value),
-                      })
-                    }
-                  />
-                </label>
-                <label className="redflow-label">
-                  可发结束（时）
-                  <input
-                    className="redflow-input"
-                    type="number"
-                    min={0}
-                    max={23}
-                    value={settingsForm.scheduleEndHour}
-                    onChange={(e) =>
-                      persistSettingsPatch({
-                        scheduleEndHour: Number(e.target.value),
-                      })
-                    }
-                  />
-                </label>
+
+            <p className="redflow-perm-line">
+              GitHub 权限：{githubOk ? "已授予" : "未授予"}
+              {status?.itemCount != null ? ` · 本地 ${status.itemCount} 条` : ""}
+            </p>
+          </section>
+
+          <section className="redflow-settings-section">
+            <h3 className="redflow-settings-title">提交方式</h3>
+            <div className="redflow-mode-row">
+              <label
+                className={`redflow-mode-card${
+                  settingsForm.submitMode !== "schedule" ? " is-on" : ""
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="submitMode"
+                  checked={settingsForm.submitMode !== "schedule"}
+                  onChange={() => persistSettingsPatch({ submitMode: "draft" })}
+                />
+                <span>
+                  <strong>存草稿</strong>
+                  不勾选定时，点白色「暂存离开」
+                </span>
+              </label>
+              <label
+                className={`redflow-mode-card${
+                  settingsForm.submitMode === "schedule" ? " is-on" : ""
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="submitMode"
+                  checked={settingsForm.submitMode === "schedule"}
+                  onChange={() =>
+                    persistSettingsPatch({ submitMode: "schedule" })
+                  }
+                />
+                <span>
+                  <strong>定时发布</strong>
+                  勾选定时并填时间，点红色「定时发布」
+                </span>
+              </label>
+            </div>
+            {settingsForm.submitMode === "schedule" ? (
+              <div className="redflow-schedule-box">
+                <p className="redflow-settings-hint">
+                  勾选定时后必须填写这些项。时间在区间内随机。
+                </p>
+                <div className="redflow-settings-row">
+                  <label className="redflow-label">
+                    可发开始（时）
+                    <input
+                      className="redflow-input"
+                      type="number"
+                      min={0}
+                      max={23}
+                      value={settingsForm.scheduleStartHour}
+                      onChange={(e) =>
+                        persistSettingsPatch({
+                          scheduleStartHour: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="redflow-label">
+                    可发结束（时）
+                    <input
+                      className="redflow-input"
+                      type="number"
+                      min={0}
+                      max={23}
+                      value={settingsForm.scheduleEndHour}
+                      onChange={(e) =>
+                        persistSettingsPatch({
+                          scheduleEndHour: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+                <div className="redflow-settings-row">
+                  <label className="redflow-label">
+                    最早间隔（小时）
+                    <input
+                      className="redflow-input"
+                      type="number"
+                      min={1}
+                      max={48}
+                      value={settingsForm.scheduleMinLeadHours}
+                      onChange={(e) =>
+                        persistSettingsPatch({
+                          scheduleMinLeadHours: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="redflow-label">
+                    最多提前（天）
+                    <input
+                      className="redflow-input"
+                      type="number"
+                      min={1}
+                      max={14}
+                      value={settingsForm.scheduleMaxAheadDays}
+                      onChange={(e) =>
+                        persistSettingsPatch({
+                          scheduleMaxAheadDays: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </label>
+                </div>
               </div>
-              <div className="redflow-settings-row">
-                <label className="redflow-label">
-                  最早间隔（小时）
-                  <input
-                    className="redflow-input"
-                    type="number"
-                    min={1}
-                    max={48}
-                    value={settingsForm.scheduleMinLeadHours}
-                    onChange={(e) =>
-                      persistSettingsPatch({
-                        scheduleMinLeadHours: Number(e.target.value),
-                      })
-                    }
-                  />
-                </label>
-                <label className="redflow-label">
-                  最多提前（天）
-                  <input
-                    className="redflow-input"
-                    type="number"
-                    min={1}
-                    max={14}
-                    value={settingsForm.scheduleMaxAheadDays}
-                    onChange={(e) =>
-                      persistSettingsPatch({
-                        scheduleMaxAheadDays: Number(e.target.value),
-                      })
-                    }
-                  />
-                </label>
+            ) : (
+              <p className="redflow-settings-hint">
+                页面上不会勾选「定时发布」，只把笔记存成创作者草稿。
+              </p>
+            )}
+          </section>
+
+          <section className="redflow-settings-section">
+            <h3 className="redflow-settings-title">自动化</h3>
+            <label className="redflow-toggle">
+              <input
+                type="checkbox"
+                checked={Boolean(settingsForm.dailyAutoPublish)}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  const next = normalizeConfig({
+                    ...settingsForm,
+                    dailyAutoPublish: on,
+                  });
+                  setSettingsForm(next);
+                  skipConfigReloadRef.current = true;
+                  void saveConfig(next).then(() => {
+                    setConfig(next);
+                    setSettingsMsg(
+                      on
+                        ? "已开启每天自动 5 篇：侧栏开着且发布页打开时自动跑"
+                        : "已关闭每天自动发布",
+                    );
+                  });
+                }}
+              />
+              <span>每天自动处理 5 篇</span>
+            </label>
+            <p className="redflow-settings-hint">
+              与「开始自动化」、手动导入同一套逻辑；侧栏与发布页需保持打开。
+            </p>
+          </section>
+
+          <section className="redflow-settings-section">
+            <div className="redflow-settings-title-row">
+              <h3 className="redflow-settings-title">停顿节奏</h3>
+              <div className="redflow-pace-presets">
+                {PACE_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className="redflow-pace-preset"
+                    onClick={() => applyPacePreset(preset.pace)}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
               </div>
             </div>
-          ) : (
             <p className="redflow-settings-hint">
-              页面上不会勾选「定时发布」，只把笔记存成创作者草稿。
+              各步骤等待毫秒数（50–20000）。网络快、页面稳时可试「快速」；填表偶发失败可试「稳健」或调大「填表步骤」。
             </p>
-          )}
-
-          <label className="redflow-toggle">
-            <input
-              type="checkbox"
-              checked={Boolean(settingsForm.dailyAutoPublish)}
-              onChange={(e) => {
-                const on = e.target.checked;
-                const next = { ...settingsForm, dailyAutoPublish: on };
-                setSettingsForm(next);
-                skipConfigReloadRef.current = true;
-                void saveConfig(next).then(() => {
-                  setConfig(next);
-                  setSettingsMsg(
-                    on
-                      ? "已开启每天自动发布 5 篇：侧栏开着且发布页打开时自动跑"
-                      : "已关闭每天自动发布",
-                  );
-                });
-              }}
-            />
-            <span>每天自动发布 5 篇</span>
-          </label>
-          <p className="redflow-settings-hint">
-            侧栏开着、并且已经打开小红书发布页时，按上面的提交方式自动处理今天的
-            5 篇，完成后停止。与「开始自动化」、手动导入同一套逻辑，不会同时跑。
-          </p>
-
-          <p className="redflow-perm-line">
-            GitHub 权限：{githubOk ? "已授予" : "未授予"}
-            {status?.itemCount != null ? ` · 本地 ${status.itemCount} 条` : ""}
-          </p>
+            <div className="redflow-pace-grid">
+              {PACE_FIELDS.map(({ key, label, hint }) => (
+                <label key={key} className="redflow-pace-field">
+                  <span className="redflow-pace-label">
+                    {label}
+                    {hint ? (
+                      <span className="redflow-pace-hint">{hint}</span>
+                    ) : null}
+                  </span>
+                  <div className="redflow-pace-input-wrap">
+                    <input
+                      className="redflow-input redflow-input-pace"
+                      type="number"
+                      min={50}
+                      max={20000}
+                      step={50}
+                      value={settingsForm.pace?.[key] ?? DEFAULT_PACE_MS[key]}
+                      onChange={(e) => persistPaceField(key, e.target.value)}
+                    />
+                    <span className="redflow-pace-unit">ms</span>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </section>
 
           {settingsMsg && <p className="redflow-settings-msg">{settingsMsg}</p>}
 
@@ -1219,22 +1293,25 @@ export function PanelApp() {
                 </div>
               </div>
             ) : (
-              <div className="redflow-danger-row">
-                <button
-                  type="button"
-                  className="redflow-btn-soft"
-                  onClick={() => askDanger("flags")}
-                >
-                  清空发布标记
-                </button>
-                <button
-                  type="button"
-                  className="redflow-btn-soft"
-                  onClick={onAskWipeAll}
-                >
-                  清空草稿列表
-                </button>
-              </div>
+              <section className="redflow-settings-section redflow-settings-section-danger">
+                <h3 className="redflow-settings-title">数据清理</h3>
+                <div className="redflow-danger-row">
+                  <button
+                    type="button"
+                    className="redflow-btn-soft"
+                    onClick={() => askDanger("flags")}
+                  >
+                    清空发布标记
+                  </button>
+                  <button
+                    type="button"
+                    className="redflow-btn-soft"
+                    onClick={onAskWipeAll}
+                  >
+                    清空草稿列表
+                  </button>
+                </div>
+              </section>
             )}
           </div>
         </form>

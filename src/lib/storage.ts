@@ -4,6 +4,7 @@ import {
   type UploadHistory,
 } from "@/types";
 import { itemKey } from "./keys";
+import { normalizePace } from "./pace";
 import { normalizeSchedulePlan } from "./schedule";
 
 const CONFIG_KEY = "redflow_config";
@@ -42,6 +43,7 @@ export function normalizeConfig(
   merged.scheduleEndHour = plan.endHour;
   merged.scheduleMinLeadHours = plan.minLeadHours;
   merged.scheduleMaxAheadDays = plan.maxAheadDays;
+  merged.pace = normalizePace(merged.pace);
   return merged;
 }
 
