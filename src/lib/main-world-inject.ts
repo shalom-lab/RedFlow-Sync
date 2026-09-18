@@ -194,20 +194,17 @@ export type MainWorldSelectResult = {
   error?: string;
 };
 
-/**
- * 页面主世界点合集：先点开「选择合集」，列表出现后再点 .item。
- * 整段自包含，供 chrome.scripting.executeScript({ world: "MAIN" }) 使用。
- */
-export async function selectPublishMenuInMainWorld(
-  kind: "collection" | "groupChat",
-  name: string,
-): Promise<MainWorldSelectResult> {
-  if (kind !== "collection") return { ok: true };
+export type MainWorldAiDeclareResult = {
+  ok: boolean;
+  selected?: string;
+  error?: string;
+};
 
+const AI_DECLARE_LABELS = ["笔记含AI合成内容", "笔记含AI生成内容", "包含AI生成内容"];
+
+function createMainWorldClickHelpers() {
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
   const norm = (s: string) => s.replace(/\s+/g, "").trim();
-  const target = norm(name);
-  if (!target) return { ok: false, error: "名称为空" };
 
   const visible = (el: HTMLElement | null): el is HTMLElement => {
     if (!el) return false;
@@ -274,6 +271,24 @@ export async function selectPublishMenuInMainWorld(
     return fn();
   };
 
+  return { sleep, norm, visible, fireClick, waitFor };
+}
+
+/**
+ * 页面主世界点合集：先点开「选择合集」，列表出现后再点 .item。
+ * 整段自包含，供 chrome.scripting.executeScript({ world: "MAIN" }) 使用。
+ */
+export async function selectPublishMenuInMainWorld(
+  kind: "collection" | "groupChat",
+  name: string,
+): Promise<MainWorldSelectResult> {
+  if (kind !== "collection") return { ok: true };
+
+  const { sleep, norm, visible, fireClick, waitFor } =
+    createMainWorldClickHelpers();
+  const target = norm(name);
+  if (!target) return { ok: false, error: "名称为空" };
+
   const selectedText = () => {
     const el =
       document.querySelector<HTMLElement>(
@@ -328,6 +343,112 @@ export async function selectPublishMenuInMainWorld(
     }
   }
   return { ok: false, error: "已点合集项但按钮文案未变", selected: selectedText() };
+}
+
+/**
+ * 内容类型声明是 d-select（.custom-select-44），下拉常驻 DOM 但 display:none。
+ * 普通点击打不开；实测可靠做法：强制显示 .declaration-drop-down，再点对应行的
+ * .d-option-handler。选中后 .d-select-description 会变成「笔记含AI合成内容」。
+ */
+export async function declareAiContentInMainWorld(): Promise<MainWorldAiDeclareResult> {
+  const { sleep, norm, fireClick } = createMainWorldClickHelpers();
+  const targetLabel = "笔记含AI合成内容";
+
+  const selectedText = () => {
+    const desc = document.querySelector<HTMLElement>(
+      ".custom-select-44 .d-select-description",
+    );
+    return norm(desc?.textContent || "");
+  };
+
+  const cur = selectedText();
+  if (AI_DECLARE_LABELS.some((l) => cur.includes(norm(l)))) {
+    return { ok: true, selected: cur };
+  }
+
+  const expandContentSettings = async () => {
+    if (document.querySelector(".custom-select-44")) return;
+    const headers = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".publish-page-content-setting-header, [class*='setting-header'], [class*='content-setting']",
+      ),
+    );
+    for (const h of headers) {
+      const t = h.textContent || "";
+      if (!t.includes("内容设置")) continue;
+      if (t.includes("收起")) return;
+      fireClick(h);
+      await sleep(350);
+      return;
+    }
+  };
+
+  await expandContentSettings();
+
+  const wrap = document.querySelector<HTMLElement>(".custom-select-44");
+  const pop = document.querySelector<HTMLElement>(
+    ".declaration-drop-down, .custom-dropdown-44.declaration-drop-down, .d-popover.declaration-drop-down",
+  );
+  if (!wrap) return { ok: false, error: "未找到内容类型声明 d-select（.custom-select-44）" };
+  if (!pop) {
+    return {
+      ok: false,
+      error: "未找到声明下拉（.declaration-drop-down）",
+    };
+  }
+
+  wrap.scrollIntoView({ block: "center", inline: "nearest" });
+  await sleep(120);
+  const wr = wrap.getBoundingClientRect();
+  pop.style.display = "block";
+  pop.style.visibility = "visible";
+  pop.style.opacity = "1";
+  pop.style.pointerEvents = "auto";
+  pop.style.zIndex = "99999";
+  pop.style.transform = `translate3d(${Math.round(wr.left)}px, ${Math.round(wr.bottom + 4)}px, 0px)`;
+  await sleep(80);
+
+  const nameEl = Array.from(
+    pop.querySelectorAll<HTMLElement>(".d-option-name"),
+  ).find((el) => {
+    const t = norm(el.textContent || "");
+    return AI_DECLARE_LABELS.some((l) => t === norm(l) || t.includes(norm(l)));
+  });
+  if (!nameEl) {
+    return { ok: false, error: "下拉里没有「笔记含AI合成内容」" };
+  }
+
+  let clickTarget: HTMLElement = nameEl;
+  const contentItem = nameEl.closest<HTMLElement>(".d-grid-item");
+  const options = contentItem?.parentElement;
+  if (contentItem && options) {
+    const items = Array.from(
+      options.querySelectorAll<HTMLElement>(":scope > .d-grid-item"),
+    );
+    const idx = items.indexOf(contentItem);
+    const handler = items[idx - 2]?.querySelector<HTMLElement>(
+      ".d-option-handler",
+    );
+    if (handler) clickTarget = handler;
+  }
+
+  fireClick(clickTarget);
+  await sleep(200);
+
+  for (let i = 0; i < 25; i++) {
+    await sleep(100);
+    const now = selectedText();
+    if (AI_DECLARE_LABELS.some((l) => now.includes(norm(l)))) {
+      console.info("[RedFlow] 已选 AI 内容声明", { selected: now });
+      return { ok: true, selected: now || targetLabel };
+    }
+  }
+
+  return {
+    ok: false,
+    error: "已点「笔记含AI合成内容」但 .d-select-description 未变",
+    selected: selectedText() || undefined,
+  };
 }
 
 export type FooterClickKind = "draft" | "schedule";

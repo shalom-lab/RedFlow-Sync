@@ -16,6 +16,7 @@ import type { RedFlowRequest, RedFlowResponse } from "@/lib/messages";
 import {
   assembleUploadInputFromWindowB64,
   clickZancunLeaveInMainWorld,
+  declareAiContentInMainWorld,
   muteGeolocationInMainWorld,
   selectPublishMenuInMainWorld,
   writeWindowB64Chunk,
@@ -117,6 +118,7 @@ chrome.runtime.onMessage.addListener(
           kind: "collection" | "groupChat";
           name: string;
         }
+      | { type: "MAIN_WORLD_DECLARE_AI" }
       | {
           type: "INJECT_IMAGE_FILES";
           files?: MainWorldImageFile[];
@@ -214,6 +216,30 @@ chrome.runtime.onMessage.addListener(
             args: [message.kind, message.name],
           });
           sendResponse(result ?? { ok: false, error: "MAIN select 无返回" });
+        } catch (e) {
+          sendResponse({
+            ok: false,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      })();
+      return true;
+    }
+
+    if (message && typeof message === "object" && message.type === "MAIN_WORLD_DECLARE_AI") {
+      const tabId = _sender.tab?.id;
+      void (async () => {
+        try {
+          if (tabId == null) {
+            sendResponse({ ok: false, error: "no tab" });
+            return;
+          }
+          const [{ result }] = await chrome.scripting.executeScript({
+            target: { tabId },
+            world: "MAIN",
+            func: declareAiContentInMainWorld,
+          });
+          sendResponse(result ?? { ok: false, error: "MAIN AI 声明无返回" });
         } catch (e) {
           sendResponse({
             ok: false,

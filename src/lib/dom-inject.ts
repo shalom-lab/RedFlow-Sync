@@ -641,6 +641,31 @@ async function runMainWorldSelect(
   });
 }
 
+async function runMainWorldDeclareAi(): Promise<{
+  ok: boolean;
+  selected?: string;
+  error?: string;
+}> {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ type: "MAIN_WORLD_DECLARE_AI" }, (response) => {
+        void chrome.runtime.lastError;
+        resolve(
+          (response as { ok: boolean; selected?: string; error?: string }) || {
+            ok: false,
+            error: "无响应",
+          },
+        );
+      });
+    } catch (e) {
+      resolve({
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+}
+
 function isDisplayedBox(el: HTMLElement): boolean {
   const style = window.getComputedStyle(el);
   if (style.display === "none" || style.visibility === "hidden") return false;
@@ -735,109 +760,72 @@ const AI_CONTENT_OPTION_MATCHERS: Array<(t: string) => boolean> = [
   (t) => t === "包含AI生成内容",
 ];
 
-function findContentTypeDeclarationTrigger(): HTMLElement | null {
-  return (
-    findVisibleByText(
-      [
-        (t) => t === "添加内容类型声明",
-        (t) => t.includes("添加内容类型声明") && t.length < 18,
-      ],
-      8,
-    ) ||
-    findVisibleByText(
-      [
-        (t) =>
-          (t.includes("笔记含AI合成内容") || t.includes("笔记含AI生成内容")) &&
-          t.length < 20,
-      ],
-      8,
-    )
-  );
+function findContentTypeSelect(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(".custom-select-44");
 }
 
 function findAiContentDropdownPanel(): HTMLElement | null {
-  const panels = Array.from(
-    document.querySelectorAll<HTMLElement>(
-      ".d-popover, .d-dropdown, [class*='popover'], [class*='dropdown-menu'], [class*='select-dropdown'], [class*='dropdown']",
-    ),
+  return document.querySelector<HTMLElement>(
+    ".declaration-drop-down, .custom-dropdown-44.declaration-drop-down",
   );
-  for (const panel of panels) {
-    if (!isDisplayedBox(panel)) continue;
-    const t = normalizeLabel(panel.textContent || "");
-    if (
-      t.includes("笔记含AI合成内容") &&
-      (t.includes("虚构演绎") || t.includes("添加内容类型声明"))
-    ) {
-      return panel;
-    }
-  }
-  return null;
 }
 
-function findAiContentMenuItem(): HTMLElement | null {
-  const panel = findAiContentDropdownPanel();
-  if (panel) {
-    const candidates = Array.from(
-      panel.querySelectorAll<HTMLElement>("li, div, span, button, p"),
-    );
-    for (const el of candidates) {
-      const t = normalizeLabel(el.textContent || "");
-      if (!AI_CONTENT_OPTION_MATCHERS.some((fn) => fn(t))) continue;
-      if (!isVisibleClickable(el)) continue;
-      if (el.children.length > 2) continue;
-      return el;
-    }
-  }
-  return findVisibleByText(AI_CONTENT_OPTION_MATCHERS, 3);
-}
-
-function isAiContentMenuOpen(): boolean {
-  return Boolean(findAiContentDropdownPanel() || findAiContentMenuItem());
+function contentTypeSelectedText(): string {
+  const desc = document.querySelector<HTMLElement>(
+    ".custom-select-44 .d-select-description",
+  );
+  return normalizeLabel(desc?.textContent || "");
 }
 
 function isAiContentDeclared(): boolean {
-  if (isAiContentMenuOpen()) return false;
+  const t = contentTypeSelectedText();
+  return AI_CONTENT_OPTION_MATCHERS.some((fn) => fn(t));
+}
 
-  const trigger = findContentTypeDeclarationTrigger();
-  if (trigger) {
-    const t = normalizeLabel(trigger.textContent || "");
-    if (
-      t.includes("笔记含AI合成内容") ||
-      t.includes("笔记含AI生成内容") ||
-      t.includes("包含AI生成内容")
-    ) {
-      return true;
-    }
+function findAiContentOptionHandler(): HTMLElement | null {
+  const pop = findAiContentDropdownPanel();
+  if (!pop) return null;
+  const nameEl = Array.from(
+    pop.querySelectorAll<HTMLElement>(".d-option-name"),
+  ).find((el) =>
+    AI_CONTENT_OPTION_MATCHERS.some((fn) =>
+      fn(normalizeLabel(el.textContent || "")),
+    ),
+  );
+  if (!nameEl) return null;
+  const contentItem = nameEl.closest<HTMLElement>(".d-grid-item");
+  const options = contentItem?.parentElement;
+  if (contentItem && options) {
+    const items = Array.from(
+      options.querySelectorAll<HTMLElement>(":scope > .d-grid-item"),
+    );
+    const idx = items.indexOf(contentItem);
+    const handler = items[idx - 2]?.querySelector<HTMLElement>(
+      ".d-option-handler",
+    );
+    if (handler) return handler;
   }
+  return nameEl;
+}
 
-  const chip = findVisibleByText(AI_CONTENT_OPTION_MATCHERS, 4);
-  if (!chip) return false;
-  if (findAiContentDropdownPanel()?.contains(chip)) return false;
+/** 下拉常驻 DOM 但 display:none，强制显示后再点选项。 */
+function forceOpenContentTypeDropdown(): boolean {
+  const wrap = findContentTypeSelect();
+  const pop = findAiContentDropdownPanel();
+  if (!wrap || !pop) return false;
+  const wr = wrap.getBoundingClientRect();
+  pop.style.display = "block";
+  pop.style.visibility = "visible";
+  pop.style.opacity = "1";
+  pop.style.pointerEvents = "auto";
+  pop.style.zIndex = "99999";
+  pop.style.transform = `translate3d(${Math.round(wr.left)}px, ${Math.round(wr.bottom + 4)}px, 0px)`;
   return true;
 }
 
-async function openContentTypeDeclarationMenu(): Promise<boolean> {
-  if (isAiContentMenuOpen()) return true;
-
-  await expandContentSettings();
-
-  const trigger = findContentTypeDeclarationTrigger();
-  if (!trigger) return false;
-
-  trigger.scrollIntoView({ block: "center", inline: "nearest" });
-  await waitPace("click");
-  nativePointerClick(trigger);
-  await waitPace("menu");
-
-  return (
-    isAiContentMenuOpen() ||
-    Boolean(await waitUntil(() => findAiContentMenuItem(), 3000))
-  );
-}
-
 /**
- * 在「添加内容类型声明」下拉里点「笔记含AI合成内容」。
- * 返回是否达到目标状态（不要求声明时视为成功）。
+ * 在「添加内容类型声明」d-select 里选「笔记含AI合成内容」。
+ * 优先 MAIN world（与合集同款）；失败再强制显示下拉兜底。
  */
 export async function setDeclareAiContent(enabled: boolean): Promise<boolean> {
   if (!enabled) {
@@ -848,22 +836,35 @@ export async function setDeclareAiContent(enabled: boolean): Promise<boolean> {
 
   if (isAiContentDeclared()) return true;
 
-  const opened = await openContentTypeDeclarationMenu();
-  if (!opened) {
-    console.warn("[RedFlow] 未找到「添加内容类型声明」下拉");
-    return false;
+  await expandContentSettings();
+  await waitUntil(() => findContentTypeSelect(), 8000);
+
+  const wrap = findContentTypeSelect();
+  if (wrap) {
+    wrap.scrollIntoView({ block: "center", inline: "nearest" });
+    await waitPace("click");
   }
 
-  const item = findAiContentMenuItem();
+  const main = await runMainWorldDeclareAi();
+  if (main.ok) {
+    await waitUntil(() => isAiContentDeclared(), 2500);
+    if (isAiContentDeclared()) return true;
+  } else if (main.error) {
+    console.warn("[RedFlow] MAIN world AI 声明", main.error);
+  }
+
+  if (!forceOpenContentTypeDropdown()) {
+    console.warn("[RedFlow] 未找到内容类型声明 d-select / 下拉");
+    return false;
+  }
+  await sleep(80);
+  const item = findAiContentOptionHandler();
   if (!item) {
     console.warn("[RedFlow] 未找到「笔记含AI合成内容」菜单项");
     return false;
   }
-
-  item.scrollIntoView({ block: "center", inline: "nearest" });
   nativePointerClick(item);
   await waitPace("click");
-
   await waitUntil(() => isAiContentDeclared(), 2500);
   if (isAiContentDeclared()) return true;
 

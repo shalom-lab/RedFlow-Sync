@@ -170,6 +170,7 @@ export function PanelApp() {
   const busyRef = useRef<string | null>(null);
   const autoRunningRef = useRef(false);
   const dailyKickRef = useRef(false);
+  const syncPollRef = useRef<number | null>(null);
   categoryRef.current = category;
   itemsRef.current = items;
   busyRef.current = busyId;
@@ -192,6 +193,7 @@ export function PanelApp() {
     return () => {
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
       if (wipeTimerRef.current) window.clearTimeout(wipeTimerRef.current);
+      if (syncPollRef.current) window.clearInterval(syncPollRef.current);
     };
   }, []);
 
@@ -224,11 +226,11 @@ export function PanelApp() {
         .sort((a, b) => Number(a.uploaded) - Number(b.uploaded));
       setItems(mapped);
 
-      // 空列表且后台真实在 sync：有限次轮询；分类切换后作废
+      // 空列表且后台仍在 sync：短暂补拉几次（主清理靠上面的 sync 状态轮询）
       if (
         !mapped.length &&
         res.status.syncing &&
-        emptyPollRef.current < 8 &&
+        emptyPollRef.current < 4 &&
         categoryRef.current === cat
       ) {
         emptyPollRef.current += 1;
@@ -236,7 +238,7 @@ export function PanelApp() {
           if (categoryRef.current === cat && loadGenRef.current === gen) {
             void loadFromLocal(cat);
           }
-        }, 1500);
+        }, 1200);
       } else if (mapped.length || !res.status.syncing) {
         emptyPollRef.current = 0;
       }
@@ -248,6 +250,63 @@ export function PanelApp() {
       if (gen === loadGenRef.current) setLoading(false);
     }
   }, []);
+
+  /**
+   * 后台 syncing=true 时持续拉状态；结束后关掉横幅并刷新列表。
+   * 以前只在空列表时轮询 8 次，同步稍慢或结束后未再拉一次，横幅会一直转。
+   */
+  useEffect(() => {
+    const backgroundSyncing = Boolean(status?.syncing) && !syncing;
+    if (!backgroundSyncing) {
+      if (syncPollRef.current) {
+        window.clearInterval(syncPollRef.current);
+        syncPollRef.current = null;
+      }
+      return;
+    }
+
+    let cancelled = false;
+    let ticks = 0;
+    const MAX_TICKS = 90; // ~90s
+
+    const tick = async () => {
+      if (cancelled) return;
+      ticks += 1;
+      try {
+        const res = await sendRedFlow({ type: "GET_SYNC_STATUS" });
+        if (cancelled || !res.ok || !("status" in res)) return;
+        setStatus(res.status);
+        if (!res.status.syncing) {
+          if (syncPollRef.current) {
+            window.clearInterval(syncPollRef.current);
+            syncPollRef.current = null;
+          }
+          const cat = categoryRef.current;
+          if (cat) void loadFromLocal(cat);
+          return;
+        }
+      } catch {
+        /* ignore */
+      }
+      if (ticks >= MAX_TICKS) {
+        setStatus((prev) => (prev ? { ...prev, syncing: false } : prev));
+        if (syncPollRef.current) {
+          window.clearInterval(syncPollRef.current);
+          syncPollRef.current = null;
+        }
+      }
+    };
+
+    void tick();
+    syncPollRef.current = window.setInterval(() => void tick(), 1000);
+    return () => {
+      cancelled = true;
+      if (syncPollRef.current) {
+        window.clearInterval(syncPollRef.current);
+        syncPollRef.current = null;
+      }
+    };
+  }, [status?.syncing, syncing, loadFromLocal]);
 
   const applyConfig = useCallback(
     async (cfg: ExtensionConfig, preferCat?: string) => {
@@ -316,8 +375,13 @@ export function PanelApp() {
       if (!res.ok) {
         setError(res.error);
         showError(res.error);
+        setStatus((prev) =>
+          prev ? { ...prev, syncing: false } : prev,
+        );
       } else {
-        if ("status" in res) setStatus(res.status);
+        if ("status" in res) {
+          setStatus({ ...res.status, syncing: false });
+        }
         const r = "result" in res ? res.result : undefined;
         showToast(
           r ? `已同步草稿 ${r.fetchedJson} 条（配图导入时再下）` : "同步完成",
@@ -602,8 +666,11 @@ export function PanelApp() {
       if (!syncRes.ok) {
         setSettingsMsg(`已保存，同步失败：${syncRes.error}`);
         showError(syncRes.error);
+        setStatus((prev) => (prev ? { ...prev, syncing: false } : prev));
       } else {
-        if ("status" in syncRes) setStatus(syncRes.status);
+        if ("status" in syncRes) {
+          setStatus({ ...syncRes.status, syncing: false });
+        }
         const r = "result" in syncRes ? syncRes.result : undefined;
         setSettingsMsg(
           r
