@@ -17,6 +17,7 @@ import {
   assembleUploadInputFromWindowB64,
   clickZancunLeaveInMainWorld,
   declareAiContentInMainWorld,
+  ensureMainWorldHelpersInstalled,
   muteGeolocationInMainWorld,
   selectGroupChatInMainWorld,
   selectPublishMenuInMainWorld,
@@ -28,6 +29,26 @@ import {
 
 const ALARM_SYNC = "redflow-incremental-sync";
 const SYNC_PERIOD_HOURS = 6;
+
+/** 先注入自包含 helpers 到 window.__rfMain，再跑业务入口（入口不可依赖扩展侧闭包）。 */
+async function execMainWorld<A extends unknown[], R>(
+  tabId: number,
+  func: (...args: A) => R | Promise<R>,
+  args?: A,
+): Promise<R | undefined> {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: ensureMainWorldHelpersInstalled,
+  });
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func,
+    ...(args ? { args } : {}),
+  });
+  return result as R | undefined;
+}
 
 /** 空缓存自动同步防抖：同一时间只触发一次 */
 let emptyCacheKickoff: Promise<void> | null = null;
@@ -213,12 +234,11 @@ chrome.runtime.onMessage.addListener(
             sendResponse({ ok: false, error: "no tab" });
             return;
           }
-          const [{ result }] = await chrome.scripting.executeScript({
-            target: { tabId },
-            world: "MAIN",
-            func: selectPublishMenuInMainWorld,
-            args: [message.kind, message.name],
-          });
+          const result = await execMainWorld(
+            tabId,
+            selectPublishMenuInMainWorld,
+            [message.kind, message.name] as ["collection" | "groupChat", string],
+          );
           sendResponse(result ?? { ok: false, error: "MAIN select 无返回" });
         } catch (e) {
           sendResponse({
@@ -238,11 +258,7 @@ chrome.runtime.onMessage.addListener(
             sendResponse({ ok: false, error: "no tab" });
             return;
           }
-          const [{ result }] = await chrome.scripting.executeScript({
-            target: { tabId },
-            world: "MAIN",
-            func: declareAiContentInMainWorld,
-          });
+          const result = await execMainWorld(tabId, declareAiContentInMainWorld);
           sendResponse(result ?? { ok: false, error: "MAIN AI 声明无返回" });
         } catch (e) {
           sendResponse({
@@ -262,12 +278,11 @@ chrome.runtime.onMessage.addListener(
             sendResponse({ ok: false, error: "no tab" });
             return;
           }
-          const [{ result }] = await chrome.scripting.executeScript({
-            target: { tabId },
-            world: "MAIN",
-            func: selectGroupChatInMainWorld,
-            args: [message.name ?? ""],
-          });
+          const result = await execMainWorld(
+            tabId,
+            selectGroupChatInMainWorld,
+            [message.name ?? ""] as [string],
+          );
           sendResponse(result ?? { ok: false, error: "MAIN 群聊选择无返回" });
         } catch (e) {
           sendResponse({
@@ -287,11 +302,10 @@ chrome.runtime.onMessage.addListener(
             sendResponse({ ok: false, error: "no tab" });
             return;
           }
-          const [{ result }] = await chrome.scripting.executeScript({
-            target: { tabId },
-            world: "MAIN",
-            func: selectQuoteNoteFirstInMainWorld,
-          });
+          const result = await execMainWorld(
+            tabId,
+            selectQuoteNoteFirstInMainWorld,
+          );
           sendResponse(result ?? { ok: false, error: "MAIN 引用笔记无返回" });
         } catch (e) {
           sendResponse({

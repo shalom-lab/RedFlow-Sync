@@ -200,9 +200,29 @@ export type MainWorldAiDeclareResult = {
   error?: string;
 };
 
-const AI_DECLARE_LABELS = ["笔记含AI合成内容", "笔记含AI生成内容", "包含AI生成内容"];
+/**
+ * executeScript 只序列化入口函数本身，外层闭包会丢。
+ * 先注入本函数把工具挂到 window，后续 MAIN 入口只读 window.__rfMain。
+ */
+export type RedflowMainHelpers = {
+  sleep: (ms: number) => Promise<void>;
+  norm: (s: string) => string;
+  visible: (el: HTMLElement | null) => el is HTMLElement;
+  fireClick: (el: HTMLElement) => void;
+  waitFor: (
+    fn: () => HTMLElement | null,
+    tries?: number,
+  ) => Promise<HTMLElement | null>;
+  AI_DECLARE_LABELS: string[];
+};
 
-function createMainWorldClickHelpers() {
+type RedflowMainWindow = Window & { __rfMain?: RedflowMainHelpers };
+
+/** 整段自包含，供 executeScript({ world: "MAIN" }) 使用。 */
+export function ensureMainWorldHelpersInstalled(): boolean {
+  const w = window as RedflowMainWindow;
+  if (w.__rfMain) return true;
+
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
   const norm = (s: string) => s.replace(/\s+/g, "").trim();
 
@@ -271,8 +291,22 @@ function createMainWorldClickHelpers() {
     return fn();
   };
 
-  return { sleep, norm, visible, fireClick, waitFor };
+  w.__rfMain = {
+    sleep,
+    norm,
+    visible,
+    fireClick,
+    waitFor,
+    AI_DECLARE_LABELS: [
+      "笔记含AI合成内容",
+      "笔记含AI生成内容",
+      "包含AI生成内容",
+    ],
+  };
+  return true;
 }
+
+/** 仅在已注入 ensureMainWorldHelpersInstalled 后的 MAIN 入口内使用：直接读 window，勿再包一层外函数。 */
 
 /**
  * 页面主世界点合集：先点开「选择合集」，列表出现后再点 .item。
@@ -284,8 +318,9 @@ export async function selectPublishMenuInMainWorld(
 ): Promise<MainWorldSelectResult> {
   if (kind !== "collection") return { ok: true };
 
-  const { sleep, norm, visible, fireClick, waitFor } =
-    createMainWorldClickHelpers();
+  const h = (window as RedflowMainWindow).__rfMain;
+  if (!h) return { ok: false, error: "MAIN helpers 未安装" };
+  const { sleep, norm, visible, fireClick, waitFor } = h;
   const target = norm(name);
   if (!target) return { ok: false, error: "名称为空" };
 
@@ -351,7 +386,9 @@ export async function selectPublishMenuInMainWorld(
  * .d-option-handler。选中后 .d-select-description 会变成「笔记含AI合成内容」。
  */
 export async function declareAiContentInMainWorld(): Promise<MainWorldAiDeclareResult> {
-  const { sleep, norm, fireClick } = createMainWorldClickHelpers();
+  const h = (window as RedflowMainWindow).__rfMain;
+  if (!h) return { ok: false, error: "MAIN helpers 未安装" };
+  const { sleep, norm, fireClick, AI_DECLARE_LABELS } = h;
   const targetLabel = "笔记含AI合成内容";
 
   const selectedText = () => {
@@ -466,8 +503,9 @@ export type MainWorldPickResult = {
 export async function selectGroupChatInMainWorld(
   name = "",
 ): Promise<MainWorldPickResult> {
-  const { sleep, norm, fireClick, waitFor, visible } =
-    createMainWorldClickHelpers();
+  const h = (window as RedflowMainWindow).__rfMain;
+  if (!h) return { ok: false, error: "MAIN helpers 未安装" };
+  const { sleep, norm, fireClick, waitFor, visible } = h;
   const want = norm(name);
 
   const selectedText = () => {
@@ -586,7 +624,9 @@ export async function selectGroupChatInMainWorld(
  * 点第一张 .note-card → 「确认引用」。
  */
 export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickResult> {
-  const { sleep, norm, fireClick, waitFor } = createMainWorldClickHelpers();
+  const h = (window as RedflowMainWindow).__rfMain;
+  if (!h) return { ok: false, error: "MAIN helpers 未安装" };
+  const { sleep, norm, fireClick, waitFor } = h;
 
   const quoteText = () =>
     norm(document.querySelector(".quote-note-container")?.textContent || "");
