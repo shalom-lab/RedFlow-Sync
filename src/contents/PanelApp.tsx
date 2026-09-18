@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   DEFAULT_CONFIG,
+  DEFAULT_COLLECTION_NAME,
   DEFAULT_DRAFTS_FILE,
   DEFAULT_IMAGES_PATH,
   DEFAULT_PROMPTS_PATH,
+  DEFAULT_REQUIRED_TOPICS,
   formatRepoSlug,
   parseRepoSlug,
   type ExtensionConfig,
@@ -643,6 +645,13 @@ export function PanelApp() {
         scheduleMaxAheadDays: settingsForm.scheduleMaxAheadDays,
         pace: normalizePace(settingsForm.pace),
         declareAiContent: settingsForm.declareAiContent !== false,
+        collectionName:
+          settingsForm.collectionName.trim() || DEFAULT_COLLECTION_NAME,
+        groupChatEnabled: settingsForm.groupChatEnabled !== false,
+        groupChatName: settingsForm.groupChatName.trim(),
+        quoteNoteEnabled: settingsForm.quoteNoteEnabled !== false,
+        requiredTopics:
+          settingsForm.requiredTopics.trim() || DEFAULT_REQUIRED_TOPICS,
       };
 
       skipConfigReloadRef.current = true;
@@ -1257,6 +1266,75 @@ export function PanelApp() {
             <p className="redflow-settings-hint">
               默认开启。导入时会点「添加内容类型声明」→「笔记含AI合成内容」。
             </p>
+          </section>
+
+          <section className="redflow-settings-section">
+            <h3 className="redflow-settings-title">发布内容</h3>
+            <p className="redflow-settings-hint">
+              合集按名字匹配；群聊名为空则点第一项；引用笔记默认点「我的笔记」第一项。
+            </p>
+
+            <label className="redflow-label">
+              合集名称
+              <input
+                className="redflow-input"
+                placeholder={DEFAULT_COLLECTION_NAME}
+                value={settingsForm.collectionName}
+                onChange={(e) =>
+                  persistSettingsPatch({ collectionName: e.target.value })
+                }
+              />
+            </label>
+
+            <label className="redflow-label">
+              必选话题（逗号分隔）
+              <input
+                className="redflow-input"
+                placeholder={DEFAULT_REQUIRED_TOPICS}
+                value={settingsForm.requiredTopics}
+                onChange={(e) =>
+                  persistSettingsPatch({ requiredTopics: e.target.value })
+                }
+              />
+            </label>
+            <p className="redflow-settings-hint">
+              正文末尾会写成 #话题，并与草稿 keywords 合并。默认含 #AI作图提示词。
+            </p>
+
+            <label className="redflow-toggle redflow-toggle-block">
+              <input
+                type="checkbox"
+                checked={settingsForm.groupChatEnabled !== false}
+                onChange={(e) =>
+                  persistSettingsPatch({ groupChatEnabled: e.target.checked })
+                }
+              />
+              <span>选择群聊</span>
+            </label>
+            {settingsForm.groupChatEnabled !== false ? (
+              <label className="redflow-label">
+                群聊名称（空=第一项）
+                <input
+                  className="redflow-input"
+                  placeholder="留空则选列表第一项"
+                  value={settingsForm.groupChatName}
+                  onChange={(e) =>
+                    persistSettingsPatch({ groupChatName: e.target.value })
+                  }
+                />
+              </label>
+            ) : null}
+
+            <label className="redflow-toggle redflow-toggle-block">
+              <input
+                type="checkbox"
+                checked={settingsForm.quoteNoteEnabled !== false}
+                onChange={(e) =>
+                  persistSettingsPatch({ quoteNoteEnabled: e.target.checked })
+                }
+              />
+              <span>引用笔记（点第一项）</span>
+            </label>
           </section>
 
           <section className="redflow-settings-section">

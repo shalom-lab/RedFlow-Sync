@@ -18,7 +18,9 @@ import {
   clickZancunLeaveInMainWorld,
   declareAiContentInMainWorld,
   muteGeolocationInMainWorld,
+  selectGroupChatInMainWorld,
   selectPublishMenuInMainWorld,
+  selectQuoteNoteFirstInMainWorld,
   writeWindowB64Chunk,
   WINDOW_B64_CHUNK,
   type MainWorldImageFile,
@@ -119,6 +121,8 @@ chrome.runtime.onMessage.addListener(
           name: string;
         }
       | { type: "MAIN_WORLD_DECLARE_AI" }
+      | { type: "MAIN_WORLD_SELECT_GROUP"; name?: string }
+      | { type: "MAIN_WORLD_SELECT_QUOTE_NOTE" }
       | {
           type: "INJECT_IMAGE_FILES";
           files?: MainWorldImageFile[];
@@ -240,6 +244,55 @@ chrome.runtime.onMessage.addListener(
             func: declareAiContentInMainWorld,
           });
           sendResponse(result ?? { ok: false, error: "MAIN AI 声明无返回" });
+        } catch (e) {
+          sendResponse({
+            ok: false,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      })();
+      return true;
+    }
+
+    if (message && typeof message === "object" && message.type === "MAIN_WORLD_SELECT_GROUP") {
+      const tabId = _sender.tab?.id;
+      void (async () => {
+        try {
+          if (tabId == null) {
+            sendResponse({ ok: false, error: "no tab" });
+            return;
+          }
+          const [{ result }] = await chrome.scripting.executeScript({
+            target: { tabId },
+            world: "MAIN",
+            func: selectGroupChatInMainWorld,
+            args: [message.name ?? ""],
+          });
+          sendResponse(result ?? { ok: false, error: "MAIN 群聊选择无返回" });
+        } catch (e) {
+          sendResponse({
+            ok: false,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      })();
+      return true;
+    }
+
+    if (message && typeof message === "object" && message.type === "MAIN_WORLD_SELECT_QUOTE_NOTE") {
+      const tabId = _sender.tab?.id;
+      void (async () => {
+        try {
+          if (tabId == null) {
+            sendResponse({ ok: false, error: "no tab" });
+            return;
+          }
+          const [{ result }] = await chrome.scripting.executeScript({
+            target: { tabId },
+            world: "MAIN",
+            func: selectQuoteNoteFirstInMainWorld,
+          });
+          sendResponse(result ?? { ok: false, error: "MAIN 引用笔记无返回" });
         } catch (e) {
           sendResponse({
             ok: false,

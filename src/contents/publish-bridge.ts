@@ -31,6 +31,8 @@ export type FillPublishPageRequest = {
   groupChatName?: string;
   scheduledAt?: string;
   declareAiContent?: boolean;
+  groupChatEnabled?: boolean;
+  quoteNoteEnabled?: boolean;
 };
 
 export type UploadImagesRequest = {
@@ -55,6 +57,7 @@ export type FillPublishPageResponse = {
     scheduled?: boolean;
     scheduledAt?: string;
     aiDeclared?: boolean;
+    quoteNote?: boolean;
   };
   hadImage?: boolean;
   /** 填表成功，侧栏应另发 CLICK_FOOTER */
@@ -142,6 +145,9 @@ async function handleFillText(
     collectionName: msg.collectionName,
     scheduledAt: msg.scheduledAt,
     declareAiContent: msg.declareAiContent,
+    groupChatEnabled: msg.groupChatEnabled,
+    groupChatName: msg.groupChatName,
+    quoteNoteEnabled: msg.quoteNoteEnabled,
   });
 
   return {
@@ -159,6 +165,7 @@ async function handleFillText(
       scheduled: result.scheduled,
       scheduledAt: result.scheduledAt,
       aiDeclared: result.aiDeclared,
+      quoteNote: result.quoteNote,
     },
     hadImage: true,
     draftPending: Boolean(result.ok && result.title && result.body),

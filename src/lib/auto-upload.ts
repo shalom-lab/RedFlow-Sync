@@ -70,8 +70,9 @@ export async function runDraftToXiaohongshuDraft(
   const body = composePublishBody({
     keywords: item.keywords,
     replyKeyword: item.replyKeyword,
+    requiredTopics: cfg.requiredTopics,
   });
-  const topics = listPublishTopics(item.keywords);
+  const topics = listPublishTopics(item.keywords, cfg.requiredTopics);
   const scheduledAt =
     submitMode === "schedule"
       ? planAllowedPublishAt(new Date(), {
@@ -89,9 +90,12 @@ export async function runDraftToXiaohongshuDraft(
     body,
     topics,
     imageRawUrl: item.imageRawUrl,
-    collectionName: "ChatGPT美图",
+    collectionName: cfg.collectionName || "ChatGPT美图",
     scheduledAt,
     declareAiContent: cfg.declareAiContent,
+    groupChatEnabled: cfg.groupChatEnabled,
+    groupChatName: cfg.groupChatName,
+    quoteNoteEnabled: cfg.quoteNoteEnabled,
   });
 
   if (!result.ok) return result;

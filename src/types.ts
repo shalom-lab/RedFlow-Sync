@@ -60,6 +60,19 @@ export interface ExtensionConfig {
   pace: PaceConfig;
   /** 填表时在「添加内容类型声明」里选「笔记含AI合成内容」 */
   declareAiContent: boolean;
+  /** 加入合集名称（按名字匹配） */
+  collectionName: string;
+  /** 是否选择群聊 */
+  groupChatEnabled: boolean;
+  /** 群聊名称；空则点列表第一项 */
+  groupChatName: string;
+  /** 是否引用笔记（默认点「我的笔记」第一项） */
+  quoteNoteEnabled: boolean;
+  /**
+   * 正文必加话题（逗号/空格分隔），默认：图美AI,ChatGPT,AI作图提示词
+   * 会与草稿 keywords 合并去重
+   */
+  requiredTopics: string;
 }
 
 /** 本地缓存使用的固定分类名（后续按 Prompt 配图仍挂在此分类下） */
@@ -70,6 +83,9 @@ export const DEFAULT_DRAFTS_FILE = "data/wechat_newspic_drafts.json";
 export const DEFAULT_PROMPTS_PATH = "infoflow-data/Prompt";
 /** 配图：infoflow-data/Images/Prompt/{图片id}.png */
 export const DEFAULT_IMAGES_PATH = "infoflow-data/Images/Prompt";
+
+export const DEFAULT_COLLECTION_NAME = "ChatGPT美图";
+export const DEFAULT_REQUIRED_TOPICS = "图美AI,ChatGPT,AI作图提示词";
 
 export const DEFAULT_CONFIG: ExtensionConfig = {
   githubToken: "",
@@ -87,6 +103,11 @@ export const DEFAULT_CONFIG: ExtensionConfig = {
   scheduleMaxAheadDays: 14,
   pace: { ...DEFAULT_PACE_MS },
   declareAiContent: true,
+  collectionName: DEFAULT_COLLECTION_NAME,
+  groupChatEnabled: true,
+  groupChatName: "",
+  quoteNoteEnabled: true,
+  requiredTopics: DEFAULT_REQUIRED_TOPICS,
 };
 
 /** UI 用：`owner/repo`；也接受完整 GitHub URL */

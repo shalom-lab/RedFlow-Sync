@@ -33,6 +33,14 @@ export function normalizeConfig(
   if (!merged.branch?.trim()) merged.branch = DEFAULT_CONFIG.branch;
   merged.dailyAutoPublish = Boolean(merged.dailyAutoPublish);
   merged.declareAiContent = merged.declareAiContent !== false;
+  merged.groupChatEnabled = merged.groupChatEnabled !== false;
+  merged.quoteNoteEnabled = merged.quoteNoteEnabled !== false;
+  merged.collectionName =
+    merged.collectionName?.trim() || DEFAULT_CONFIG.collectionName;
+  merged.groupChatName =
+    typeof merged.groupChatName === "string" ? merged.groupChatName.trim() : "";
+  merged.requiredTopics =
+    merged.requiredTopics?.trim() || DEFAULT_CONFIG.requiredTopics;
   merged.submitMode = merged.submitMode === "schedule" ? "schedule" : "draft";
   const plan = normalizeSchedulePlan({
     startHour: merged.scheduleStartHour,

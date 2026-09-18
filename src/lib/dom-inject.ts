@@ -12,6 +12,9 @@ import {
 import { arrayBufferToBase64 } from "./base64";
 import { formatXhsSchedule, parseXhsSchedule } from "./schedule";
 import { paceForImages, paceForText, sleep, waitPace } from "./pace";
+import { DEFAULT_COLLECTION_NAME } from "@/types";
+
+export { DEFAULT_COLLECTION_NAME };
 
 export interface FillTextPayload {
   title: string;
@@ -42,6 +45,8 @@ export interface DomFillSteps {
   draftSaved?: boolean;
   /** 是否已勾选 AI 生成内容声明 */
   aiDeclared?: boolean;
+  /** 是否已引用笔记 */
+  quoteNote?: boolean;
 }
 
 export class DomInjectError extends Error {
@@ -565,9 +570,6 @@ export async function ensureTopics(topics: string[]): Promise<boolean> {
   return added > 0;
 }
 
-/** 默认加入的笔记合集 */
-export const DEFAULT_COLLECTION_NAME = "ChatGPT美图";
-
 function normalizeLabel(text: string): string {
   return text.replace(/\s+/g, "").trim();
 }
@@ -664,6 +666,96 @@ async function runMainWorldDeclareAi(): Promise<{
       });
     }
   });
+}
+
+async function runMainWorldSelectGroup(name = ""): Promise<{
+  ok: boolean;
+  selected?: string;
+  error?: string;
+  skipped?: boolean;
+}> {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(
+        { type: "MAIN_WORLD_SELECT_GROUP", name },
+        (response) => {
+          void chrome.runtime.lastError;
+          resolve(
+            (response as {
+              ok: boolean;
+              selected?: string;
+              error?: string;
+              skipped?: boolean;
+            }) || { ok: false, error: "无响应" },
+          );
+        },
+      );
+    } catch (e) {
+      resolve({
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+}
+
+async function runMainWorldSelectQuoteNote(): Promise<{
+  ok: boolean;
+  selected?: string;
+  error?: string;
+  skipped?: boolean;
+}> {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(
+        { type: "MAIN_WORLD_SELECT_QUOTE_NOTE" },
+        (response) => {
+          void chrome.runtime.lastError;
+          resolve(
+            (response as {
+              ok: boolean;
+              selected?: string;
+              error?: string;
+              skipped?: boolean;
+            }) || { ok: false, error: "无响应" },
+          );
+        },
+      );
+    } catch (e) {
+      resolve({
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+}
+
+export async function selectGroupChat(name = ""): Promise<{
+  ok: boolean;
+  skipped?: boolean;
+  selected?: string;
+  error?: string;
+}> {
+  const main = await runMainWorldSelectGroup(name);
+  if (main.ok) return main;
+  return {
+    ok: false,
+    error: main.error || "选择群聊失败",
+  };
+}
+
+export async function selectQuoteNoteFirst(): Promise<{
+  ok: boolean;
+  skipped?: boolean;
+  selected?: string;
+  error?: string;
+}> {
+  const main = await runMainWorldSelectQuoteNote();
+  if (main.ok) return main;
+  return {
+    ok: false,
+    error: main.error || "引用笔记失败",
+  };
 }
 
 function isDisplayedBox(el: HTMLElement): boolean {
@@ -1440,6 +1532,9 @@ export async function fillPublishText(params: {
   topics?: string[];
   /** 默认 true：勾选 AI 生成内容声明 */
   declareAiContent?: boolean;
+  groupChatEnabled?: boolean;
+  groupChatName?: string;
+  quoteNoteEnabled?: boolean;
 }): Promise<DomFillSteps & { ok: boolean; error?: string }> {
   const steps: DomFillSteps = {
     title: false,
@@ -1451,6 +1546,7 @@ export async function fillPublishText(params: {
     scheduled: false,
     draftSaved: false,
     aiDeclared: false,
+    quoteNote: false,
   };
   const errors: string[] = [];
   const collectionName = params.collectionName || DEFAULT_COLLECTION_NAME;
@@ -1506,6 +1602,42 @@ export async function fillPublishText(params: {
   }
 
   await waitPace("menu");
+
+  if (params.groupChatEnabled !== false) {
+    try {
+      const group = await selectGroupChat(params.groupChatName || "");
+      steps.groupChat = Boolean(group.ok && !group.skipped);
+      if (!group.ok) {
+        errors.push(group.error || "选择群聊失败");
+      } else if (group.skipped) {
+        console.info("[RedFlow] 群聊跳过", group.error);
+        steps.groupChat = true; // 无群聊不视为失败
+      }
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : String(e));
+    }
+    await waitPace("menu");
+  } else {
+    steps.groupChat = true;
+  }
+
+  if (params.quoteNoteEnabled !== false) {
+    try {
+      const quote = await selectQuoteNoteFirst();
+      steps.quoteNote = Boolean(quote.ok && !quote.skipped);
+      if (!quote.ok) {
+        errors.push(quote.error || "引用笔记失败");
+      } else if (quote.skipped) {
+        console.info("[RedFlow] 引用笔记跳过", quote.error);
+        steps.quoteNote = true;
+      }
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : String(e));
+    }
+    await waitPace("menu");
+  } else {
+    steps.quoteNote = true;
+  }
 
   const wantAi = params.declareAiContent !== false;
   try {
@@ -1563,6 +1695,9 @@ export async function fillPublishForm(params: {
   scheduledAt?: string;
   topics?: string[];
   declareAiContent?: boolean;
+  groupChatEnabled?: boolean;
+  groupChatName?: string;
+  quoteNoteEnabled?: boolean;
   saveDraft?: boolean;
 }): Promise<DomFillSteps & { ok: boolean; error?: string }> {
   const hasImages = Boolean(
@@ -1618,6 +1753,9 @@ export async function fillPublishForm(params: {
     scheduledAt: params.scheduledAt,
     topics: params.topics,
     declareAiContent: params.declareAiContent,
+    groupChatEnabled: params.groupChatEnabled,
+    groupChatName: params.groupChatName,
+    quoteNoteEnabled: params.quoteNoteEnabled,
   });
 
   if (params.saveDraft !== false && filled.ok) {
