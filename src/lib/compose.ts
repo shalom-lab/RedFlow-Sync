@@ -45,7 +45,8 @@ export function listPublishTopics(
 /**
  * 拼接发布正文：
  * 🌈关键词 · 关键词
- * ✅回复关键词：xxx
+ * 👉获取方式见置顶笔记
+ * ✅回复口令：xxx
  * #话题
  */
 export function composePublishBody(opts: {
@@ -61,7 +62,8 @@ export function composePublishBody(opts: {
     keywords.length ? `🌈${keywords.join(" · ")}` : "🌈",
   ];
   if (opts.replyKeyword?.trim()) {
-    lines.push(`✅回复关键词：${opts.replyKeyword.trim()}`);
+    lines.push("👉获取方式见置顶笔记");
+    lines.push(`✅回复口令：${opts.replyKeyword.trim()}`);
   }
   lines.push(topics.map((t) => `#${t}`).join(" "));
   return lines.join("\n");
