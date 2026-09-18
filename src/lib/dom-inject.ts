@@ -736,6 +736,20 @@ export async function selectGroupChat(name = ""): Promise<{
   selected?: string;
   error?: string;
 }> {
+  await expandContentSettings();
+  const wrap = await waitUntil(
+    () =>
+      document.querySelector<HTMLElement>(
+        ".group-card-select, .group-card-wrapper",
+      ),
+    10000,
+  );
+  if (!wrap) {
+    return { ok: false, error: "未找到「选择群聊」（编辑页可能未加载完）" };
+  }
+  wrap.scrollIntoView({ block: "center", inline: "nearest" });
+  await waitPace("menu");
+
   const main = await runMainWorldSelectGroup(name);
   if (main.ok) return main;
   return {
@@ -750,6 +764,19 @@ export async function selectQuoteNoteFirst(): Promise<{
   selected?: string;
   error?: string;
 }> {
+  const trigger = await waitUntil(
+    () =>
+      document.querySelector<HTMLElement>(
+        ".quote-note-container .setting-card, .quote-note-container",
+      ),
+    10000,
+  );
+  if (!trigger) {
+    return { ok: false, error: "未找到「引用笔记」（编辑页可能未加载完）" };
+  }
+  trigger.scrollIntoView({ block: "center", inline: "nearest" });
+  await waitPace("menu");
+
   const main = await runMainWorldSelectQuoteNote();
   if (main.ok) return main;
   return {

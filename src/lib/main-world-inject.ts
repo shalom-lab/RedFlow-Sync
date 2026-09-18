@@ -503,120 +503,139 @@ export type MainWorldPickResult = {
 export async function selectGroupChatInMainWorld(
   name = "",
 ): Promise<MainWorldPickResult> {
-  const h = (window as RedflowMainWindow).__rfMain;
-  if (!h) return { ok: false, error: "MAIN helpers 未安装" };
-  const { sleep, norm, fireClick, waitFor, visible } = h;
-  const want = norm(name);
+  try {
+    const h = (window as RedflowMainWindow).__rfMain;
+    if (!h) return { ok: false, error: "MAIN helpers 未安装" };
+    const { sleep, norm, fireClick, waitFor, visible } = h;
+    const want = norm(name);
 
-  const selectedText = () => {
-    const wrap = document.querySelector<HTMLElement>(".group-card-select");
-    const desc = wrap?.querySelector<HTMLElement>(".d-select-description");
-    return norm(desc?.textContent || wrap?.textContent || "");
-  };
+    const selectedText = () => {
+      const wrap = document.querySelector<HTMLElement>(".group-card-select");
+      const desc = wrap?.querySelector<HTMLElement>(".d-select-description");
+      return norm(desc?.textContent || "");
+    };
 
-  const optionName = (el: HTMLElement) =>
-    norm(
-      el.querySelector<HTMLElement>(".group-info .name, .name")?.textContent ||
-        el.textContent ||
-        "",
-    );
+    const optionName = (el: HTMLElement) =>
+      norm(
+        el.querySelector<HTMLElement>(".group-info .name, .name")?.textContent ||
+          el.textContent ||
+          "",
+      );
 
-  const cur = selectedText();
-  if (cur && cur !== "选择群聊" && !cur.includes("暂无群聊")) {
-    if (!want || cur.includes(want)) return { ok: true, selected: cur };
-  }
+    const isPlaceholder = (t: string) =>
+      !t || t === "选择群聊" || t.includes("暂无群聊");
 
-  const wrap = document.querySelector<HTMLElement>(
-    ".group-card-select, .group-card-wrapper .d-select-wrapper",
-  );
-  if (!wrap) return { ok: false, error: "未找到「选择群聊」" };
-
-  const isGroupPop = (pop: HTMLElement) => {
-    const t = norm(pop.textContent || "");
-    if (t.includes("暂无群聊") || t.includes("我创建的群聊")) return true;
-    if (pop.querySelector(".item.custom-option")) return true;
-    if (t.includes("虚构演绎") || t.includes("笔记含AI")) return false;
-    if (t.includes("公开可见") || t.includes("搜索地点") || t.includes("自主拍摄")) {
-      return false;
+    const cur = selectedText();
+    if (!isPlaceholder(cur) && (!want || cur.includes(want))) {
+      return { ok: true, selected: cur };
     }
-    return false;
-  };
 
-  const findGroupPop = () => {
-    const pops = Array.from(
-      document.querySelectorAll<HTMLElement>(
-        ".d-popover.d-dropdown.custom-dropdown-44",
-      ),
+    const wrap = document.querySelector<HTMLElement>(
+      ".group-card-select, .group-card-wrapper .d-select-wrapper",
     );
-    return (
-      pops.find((p) => visible(p) && isGroupPop(p)) ||
-      pops.find((p) => isGroupPop(p)) ||
-      null
-    );
-  };
+    if (!wrap) return { ok: false, error: "未找到「选择群聊」" };
 
-  const forceShowPop = (pop: HTMLElement) => {
-    const wr = wrap.getBoundingClientRect();
-    pop.style.display = "block";
-    pop.style.visibility = "visible";
-    pop.style.opacity = "1";
-    pop.style.pointerEvents = "auto";
-    pop.style.zIndex = "99999";
-    pop.style.transform = `translate3d(${Math.round(wr.left)}px, ${Math.round(wr.bottom + 4)}px, 0px)`;
-  };
+    const isGroupPop = (pop: HTMLElement) => {
+      const t = norm(pop.textContent || "");
+      if (t.includes("暂无群聊") || t.includes("我创建的群聊")) return true;
+      if (pop.querySelector(".item.custom-option")) return true;
+      if (t.includes("虚构演绎") || t.includes("笔记含AI")) return false;
+      if (
+        t.includes("公开可见") ||
+        t.includes("搜索地点") ||
+        t.includes("自主拍摄")
+      ) {
+        return false;
+      }
+      return false;
+    };
 
-  wrap.scrollIntoView({ block: "center", inline: "nearest" });
-  await sleep(100);
-  fireClick(wrap);
-  await sleep(300);
+    const findGroupPop = () => {
+      const pops = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          ".d-popover.d-dropdown.custom-dropdown-44",
+        ),
+      );
+      return pops.find((p) => isGroupPop(p)) || null;
+    };
 
-  let pop = await waitFor(() => {
-    const p = findGroupPop();
-    if (!p) return null;
-    if (visible(p)) return p;
-    return null;
-  }, 20);
+    const forceShowPop = (pop: HTMLElement) => {
+      const wr = wrap.getBoundingClientRect();
+      pop.style.display = "block";
+      pop.style.visibility = "visible";
+      pop.style.opacity = "1";
+      pop.style.pointerEvents = "auto";
+      pop.style.zIndex = "99999";
+      pop.style.transform = `translate3d(${Math.round(wr.left)}px, ${Math.round(wr.bottom + 4)}px, 0px)`;
+    };
 
-  if (!pop) {
-    pop = findGroupPop();
-    if (pop) {
+    wrap.scrollIntoView({ block: "center", inline: "nearest" });
+    await sleep(200);
+    fireClick(wrap);
+    await sleep(450);
+
+    let pop = findGroupPop();
+    if (!pop) {
+      pop = await waitFor(() => findGroupPop(), 30);
+    }
+    if (!pop) return { ok: false, error: "未找到群聊下拉" };
+
+    // 下拉常驻但 display:none，始终强制显示再点选项
+    if (!visible(pop)) {
+      forceShowPop(pop);
+      await sleep(150);
+    } else {
+      // 即便判定可见，也再补一次，避免被其它 popover 盖住
       forceShowPop(pop);
       await sleep(80);
     }
-  } else if (!visible(pop)) {
-    forceShowPop(pop);
-    await sleep(80);
-  }
 
-  if (!pop) return { ok: false, error: "未找到群聊下拉" };
-
-  if (norm(pop.textContent || "").includes("暂无群聊")) {
-    return { ok: true, skipped: true, error: "暂无群聊，已跳过" };
-  }
-
-  const options = Array.from(
-    pop.querySelectorAll<HTMLElement>(".item.custom-option"),
-  );
-  if (!options.length) {
-    return { ok: true, skipped: true, error: "群聊列表为空，已跳过" };
-  }
-
-  const target =
-    (want && options.find((el) => optionName(el).includes(want))) ||
-    options[0]!;
-
-  fireClick(target);
-  await sleep(250);
-
-  for (let i = 0; i < 25; i++) {
-    await sleep(100);
-    const now = selectedText();
-    if (now && now !== "选择群聊" && !now.includes("暂无")) {
-      console.info("[RedFlow] 已选群聊", { selected: now });
-      return { ok: true, selected: now };
+    if (norm(pop.textContent || "").includes("暂无群聊")) {
+      return { ok: true, skipped: true, error: "暂无群聊，已跳过" };
     }
+
+    const options = await waitFor(() => {
+      const list = pop!.querySelectorAll<HTMLElement>(".item.custom-option");
+      return list.length ? (list[0] as HTMLElement) : null;
+    }, 30);
+    if (!options) {
+      return { ok: true, skipped: true, error: "群聊列表为空，已跳过" };
+    }
+
+    const allOptions = Array.from(
+      pop.querySelectorAll<HTMLElement>(".item.custom-option"),
+    );
+    const target =
+      (want && allOptions.find((el) => optionName(el).includes(want))) ||
+      allOptions[0]!;
+
+    // 点选项本体 + 父级 grid-item，提高 Vue 命中率
+    fireClick(target);
+    await sleep(200);
+    const gridItem = target.closest<HTMLElement>(".d-grid-item");
+    if (gridItem) {
+      fireClick(gridItem);
+      await sleep(200);
+    }
+
+    for (let i = 0; i < 40; i++) {
+      await sleep(120);
+      const now = selectedText();
+      if (!isPlaceholder(now)) {
+        if (!want || now.includes(want)) {
+          console.info("[RedFlow] 已选群聊", { selected: now });
+          return { ok: true, selected: now };
+        }
+      }
+    }
+    return {
+      ok: false,
+      error: "已点群聊但未选中",
+      selected: selectedText() || undefined,
+    };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
-  return { ok: false, error: "已点群聊但未选中", selected: selectedText() };
 }
 
 /**
@@ -624,115 +643,146 @@ export async function selectGroupChatInMainWorld(
  * 点第一张 .note-card → 「确认引用」。
  */
 export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickResult> {
-  const h = (window as RedflowMainWindow).__rfMain;
-  if (!h) return { ok: false, error: "MAIN helpers 未安装" };
-  const { sleep, norm, fireClick, waitFor } = h;
+  try {
+    const h = (window as RedflowMainWindow).__rfMain;
+    if (!h) return { ok: false, error: "MAIN helpers 未安装" };
+    const { sleep, norm, fireClick, waitFor } = h;
 
-  const quoteText = () =>
-    norm(document.querySelector(".quote-note-container")?.textContent || "");
+    const quoteText = () =>
+      norm(document.querySelector(".quote-note-container")?.textContent || "");
 
-  const already = quoteText();
-  if (already.includes("引用笔记") && already.length > 4 && !already.endsWith("引用笔记")) {
-    // e.g. 引用笔记《xxx》
-    if (already.includes("《") || already.length > 6) {
+    const already = quoteText();
+    if (
+      already.includes("引用笔记") &&
+      already.includes("《") &&
+      already.length > 6
+    ) {
       return { ok: true, selected: already };
     }
-  }
 
-  const trigger =
-    document.querySelector<HTMLElement>(".quote-note-container .setting-card") ||
-    document.querySelector<HTMLElement>(".quote-note-container");
-  if (!trigger) return { ok: false, error: "未找到「引用笔记」" };
-
-  fireClick(trigger);
-  await sleep(400);
-
-  const modal = await waitFor(
-    () => document.querySelector<HTMLElement>(".select-note-modal"),
-    50,
-  );
-  if (!modal) return { ok: false, error: "未打开「选择笔记」弹窗" };
-
-  const myTab = Array.from(
-    modal.querySelectorAll<HTMLElement>(".select-note-modal__tab"),
-  ).find((el) => norm(el.textContent || "") === "我的笔记");
-  if (myTab && !myTab.className.includes("active")) {
-    fireClick(myTab);
-    await sleep(300);
-  }
-
-  const card = await waitFor(
-    () =>
+    const trigger =
       document.querySelector<HTMLElement>(
-        ".select-note-modal__note-grid .note-card",
-      ),
-    50,
-  );
-  if (!card) {
-    // close modal
-    const cancel = Array.from(
-      modal.querySelectorAll<HTMLElement>("button, .d-button"),
-    ).find((el) => norm(el.textContent || "") === "取消");
-    if (cancel) fireClick(cancel);
-    return { ok: true, skipped: true, error: "没有可引用的笔记，已跳过" };
-  }
+        ".quote-note-container .setting-card",
+      ) || document.querySelector<HTMLElement>(".quote-note-container");
+    if (!trigger) return { ok: false, error: "未找到「引用笔记」" };
 
-  const cover =
-    card.querySelector<HTMLElement>(
-      ".note-card__cover-img, .note-card__cover, img",
-    ) || card;
-  fireClick(cover);
-  const rect = cover.getBoundingClientRect();
-  const x = rect.left + Math.max(rect.width / 2, 4);
-  const y = rect.top + Math.max(rect.height / 2, 4);
-  const hit = document
-    .elementsFromPoint(x, y)
-    .find((el) => (el as HTMLElement).closest?.(".note-card"));
-  if (hit) {
-    const host = (hit as HTMLElement).closest(".note-card") as HTMLElement;
-    fireClick(host);
-  }
-  await sleep(300);
+    trigger.scrollIntoView({ block: "center", inline: "nearest" });
+    await sleep(200);
+    fireClick(trigger);
+    await sleep(600);
 
-  if (!document.querySelector(".note-card--selected")) {
-    fireClick(card);
-    await sleep(250);
-  }
+    const modal = await waitFor(
+      () => document.querySelector<HTMLElement>(".select-note-modal"),
+      60,
+    );
+    if (!modal) return { ok: false, error: "未打开「选择笔记」弹窗" };
 
-  const confirm = await waitFor(() => {
-    const btn = Array.from(
-      document.querySelectorAll<HTMLElement>("button, .d-button"),
-    ).find((el) => {
-      const t = norm(el.textContent || "");
-      if (t !== "确认引用") return false;
-      const cls = String(el.className || "");
-      if (cls.includes("disabled")) return false;
-      if (el.getAttribute("aria-disabled") === "true") return false;
-      if (el instanceof HTMLButtonElement && el.disabled) return false;
-      return true;
-    });
-    return btn || null;
-  }, 30);
-
-  if (!confirm) {
-    return { ok: false, error: "未选中笔记，「确认引用」不可点" };
-  }
-  fireClick(confirm);
-  await sleep(400);
-
-  for (let i = 0; i < 30; i++) {
-    await sleep(100);
-    if (!document.querySelector(".select-note-modal")) {
-      const now = quoteText();
-      console.info("[RedFlow] 已引用笔记", { selected: now });
-      return { ok: true, selected: now };
+    const myTab = Array.from(
+      modal.querySelectorAll<HTMLElement>(".select-note-modal__tab"),
+    ).find((el) => norm(el.textContent || "") === "我的笔记");
+    if (myTab && !myTab.className.includes("active")) {
+      fireClick(myTab);
+      await sleep(400);
     }
+
+    const card = await waitFor(
+      () =>
+        modal.querySelector<HTMLElement>(
+          ".select-note-modal__note-grid .note-card",
+        ),
+      60,
+    );
+    if (!card) {
+      const cancel = Array.from(
+        modal.querySelectorAll<HTMLElement>("button, .d-button"),
+      ).find((el) => norm(el.textContent || "") === "取消");
+      if (cancel) fireClick(cancel);
+      return { ok: true, skipped: true, error: "没有可引用的笔记，已跳过" };
+    }
+
+    const pickCard = async (el: HTMLElement) => {
+      const cover =
+        el.querySelector<HTMLElement>(
+          ".note-card__cover-img, .note-card__cover, img",
+        ) || el;
+      fireClick(cover);
+      await sleep(150);
+      fireClick(el);
+      await sleep(150);
+      const mask = el.querySelector<HTMLElement>(".note-card__hover-mask");
+      if (mask) {
+        fireClick(mask);
+        await sleep(100);
+      }
+      // 坐标命中再点一次
+      const rect = cover.getBoundingClientRect();
+      const x = rect.left + Math.max(rect.width / 2, 4);
+      const y = rect.top + Math.max(rect.height / 2, 4);
+      const hit = document
+        .elementsFromPoint(x, y)
+        .find((n) => (n as HTMLElement).closest?.(".note-card"));
+      if (hit) {
+        fireClick(
+          ((hit as HTMLElement).closest(".note-card") as HTMLElement) ||
+            (hit as HTMLElement),
+        );
+      }
+    };
+
+    // 已有选中态就用它；否则点第一张
+    let selected = modal.querySelector<HTMLElement>(".note-card--selected");
+    if (!selected) {
+      await pickCard(card);
+      await sleep(350);
+      selected = modal.querySelector<HTMLElement>(".note-card--selected");
+    }
+    if (!selected) {
+      // 再试一次第一张
+      await pickCard(card);
+      await sleep(400);
+      selected = modal.querySelector<HTMLElement>(".note-card--selected");
+    }
+    if (!selected) {
+      return { ok: false, error: "未选中笔记，「确认引用」不可点" };
+    }
+
+    const confirm = await waitFor(() => {
+      const btn = Array.from(
+        modal.querySelectorAll<HTMLElement>("button, .d-button"),
+      ).find((el) => {
+        const t = norm(el.textContent || "");
+        if (t !== "确认引用") return false;
+        const cls = String(el.className || "");
+        if (cls.includes("disabled")) return false;
+        if (el.getAttribute("aria-disabled") === "true") return false;
+        if (el instanceof HTMLButtonElement && el.disabled) return false;
+        return true;
+      });
+      return btn || null;
+    }, 40);
+
+    if (!confirm) {
+      return { ok: false, error: "未选中笔记，「确认引用」不可点" };
+    }
+    fireClick(confirm);
+    await sleep(500);
+
+    for (let i = 0; i < 40; i++) {
+      await sleep(120);
+      if (!document.querySelector(".select-note-modal")) {
+        const now = quoteText();
+        console.info("[RedFlow] 已引用笔记", { selected: now });
+        return { ok: true, selected: now };
+      }
+    }
+    return {
+      ok: Boolean(document.querySelector(".note-card--selected")),
+      error: "已点确认引用但弹窗未关闭",
+      selected: quoteText(),
+    };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
-  return {
-    ok: Boolean(document.querySelector(".note-card--selected")),
-    error: "已点确认引用但弹窗未关闭",
-    selected: quoteText(),
-  };
 }
 
 export type FooterClickKind = "draft" | "schedule";
