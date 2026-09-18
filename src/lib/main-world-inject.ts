@@ -654,14 +654,14 @@ export async function selectGroupChatInMainWorld(
 }
 
 /**
- * 引用笔记：打开弹窗 → 第一张 .note-card 用原生 click → 「确认引用」原生 click。
- * CDP 实测：fireClick 点封面不会选中；card.click() 才能选中并点亮确认。
+ * 引用笔记：打开弹窗 → 选中第一张笔记 → 「确认引用」。
+ * 成功标准以「确认引用」可点为准（比看 --selected class 更稳）。
  */
 export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickResult> {
   try {
     const h = (window as RedflowMainWindow).__rfMain;
     if (!h) return { ok: false, error: "MAIN helpers 未安装" };
-    const { sleep, norm, fireClick, waitFor } = h;
+    const { sleep, norm, waitFor } = h;
 
     const quoteText = () =>
       norm(document.querySelector(".quote-note-container")?.textContent || "");
@@ -675,6 +675,14 @@ export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickRe
       return { ok: true, selected: already };
     }
 
+    const staleClose = document.querySelector<HTMLElement>(
+      ".select-note-modal .d-modal-close",
+    );
+    if (staleClose) {
+      staleClose.click();
+      await sleep(300);
+    }
+
     const trigger =
       document.querySelector<HTMLElement>(
         ".quote-note-container .setting-card",
@@ -682,32 +690,37 @@ export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickRe
     if (!trigger) return { ok: false, error: "未找到「引用笔记」" };
 
     trigger.scrollIntoView({ block: "center", inline: "nearest" });
-    await sleep(200);
-    fireClick(trigger);
+    await sleep(300);
     trigger.click();
-    await sleep(700);
+    await sleep(900);
 
     const modal = await waitFor(
       () => document.querySelector<HTMLElement>(".select-note-modal"),
-      60,
+      70,
     );
     if (!modal) return { ok: false, error: "未打开「选择笔记」弹窗" };
 
     const myTab = Array.from(
       modal.querySelectorAll<HTMLElement>(".select-note-modal__tab"),
     ).find((el) => norm(el.textContent || "") === "我的笔记");
-    if (myTab && !myTab.className.includes("active")) {
+    if (myTab && !String(myTab.className).includes("active")) {
       myTab.click();
-      await sleep(400);
+      await sleep(500);
     }
 
-    const card = await waitFor(
-      () =>
-        modal.querySelector<HTMLElement>(
-          ".select-note-modal__note-grid .note-card",
-        ),
-      60,
-    );
+    const card = await waitFor(() => {
+      const el = modal.querySelector<HTMLElement>(
+        ".select-note-modal__note-grid .note-card",
+      );
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      const title = norm(
+        el.querySelector(".note-card__title")?.textContent || "",
+      );
+      if (r.width < 40 || r.height < 40) return null;
+      if (!title) return null;
+      return el;
+    }, 70);
     if (!card) {
       const cancel = Array.from(
         modal.querySelectorAll<HTMLElement>("button, .d-button"),
@@ -716,44 +729,77 @@ export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickRe
       return { ok: true, skipped: true, error: "没有可引用的笔记，已跳过" };
     }
 
-    // 关键：必须 note-card 原生 click；点封面 fireClick 无效
-    let selected = modal.querySelector<HTMLElement>(".note-card--selected");
-    if (!selected) {
-      card.click();
-      await sleep(350);
-      selected = modal.querySelector<HTMLElement>(".note-card--selected");
-    }
-    if (!selected) {
-      card.click();
-      await sleep(400);
-      selected = modal.querySelector<HTMLElement>(".note-card--selected");
-    }
-    if (!selected) {
-      return { ok: false, error: "未选中第一篇笔记" };
-    }
-
-    const confirm = await waitFor(() => {
-      const btn = Array.from(
+    const findEnabledConfirm = () =>
+      Array.from(
         modal.querySelectorAll<HTMLElement>("button, .d-button"),
       ).find((el) => {
-        const t = norm(el.textContent || "");
-        if (t !== "确认引用") return false;
-        const cls = String(el.className || "");
-        if (cls.includes("disabled")) return false;
+        if (norm(el.textContent || "") !== "确认引用") return false;
+        if (String(el.className || "").includes("disabled")) return false;
         if (el.getAttribute("aria-disabled") === "true") return false;
         if (el instanceof HTMLButtonElement && el.disabled) return false;
         return true;
-      });
-      return btn || null;
-    }, 40);
+      }) || null;
+
+    const clickCard = (el: HTMLElement) => {
+      const r = el.getBoundingClientRect();
+      const x = r.left + Math.max(r.width / 2, 4);
+      const y = r.top + Math.max(r.height / 2, 4);
+      const common: MouseEventInit = {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        view: window,
+        clientX: x,
+        clientY: y,
+        screenX: x,
+        screenY: y,
+        button: 0,
+        buttons: 1,
+      };
+      el.dispatchEvent(new MouseEvent("mousedown", common));
+      el.dispatchEvent(new MouseEvent("mouseup", { ...common, buttons: 0 }));
+      el.dispatchEvent(new MouseEvent("click", { ...common, buttons: 0 }));
+      el.click();
+    };
+
+    let confirm: HTMLElement | null = findEnabledConfirm();
+    if (!confirm) {
+      const titleEl = card.querySelector<HTMLElement>(".note-card__title");
+      const coverEl = card.querySelector<HTMLElement>(
+        ".note-card__cover, .note-card__cover-img, img",
+      );
+      const targets = [card, titleEl, coverEl, card].filter(
+        (x): x is HTMLElement => Boolean(x),
+      );
+
+      for (let attempt = 0; attempt < 8 && !confirm; attempt++) {
+        const t = targets[attempt % targets.length]!;
+        t.scrollIntoView({ block: "center", inline: "nearest" });
+        await sleep(80);
+        clickCard(t);
+        for (let j = 0; j < 12; j++) {
+          await sleep(120);
+          confirm = findEnabledConfirm();
+          if (confirm) break;
+        }
+      }
+    }
 
     if (!confirm) {
-      return { ok: false, error: "「确认引用」不可点（笔记未选中）" };
+      const cancel = Array.from(
+        modal.querySelectorAll<HTMLElement>("button, .d-button"),
+      ).find((el) => norm(el.textContent || "") === "取消");
+      if (cancel) cancel.click();
+      return {
+        ok: false,
+        error: "未选中第一篇笔记，确认引用不可点",
+      };
     }
-    confirm.click();
-    await sleep(500);
 
-    for (let i = 0; i < 40; i++) {
+    confirm.click();
+    await sleep(600);
+
+    for (let i = 0; i < 50; i++) {
       await sleep(120);
       if (!document.querySelector(".select-note-modal")) {
         const now = quoteText();
