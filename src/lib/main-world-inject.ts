@@ -496,9 +496,9 @@ export type MainWorldPickResult = {
 };
 
 /**
- * 选择群聊：.group-card-select；下拉常驻 DOM 但常为 display:none。
- * 选项是 .item.custom-option（.group-info .name），不是 .d-option-name。
- * name 为空则点第一项；「暂无群聊」时跳过。
+ * 选择群聊：.group-card-select。
+ * 注意：DOM 里常驻一份「暂无群聊」空态；不能一找到空态就 forceShow/跳过，
+ * 要先点开并等待 `.item.custom-option`（或「我创建的群聊」）出现。
  */
 export async function selectGroupChatInMainWorld(
   name = "",
@@ -506,7 +506,7 @@ export async function selectGroupChatInMainWorld(
   try {
     const h = (window as RedflowMainWindow).__rfMain;
     if (!h) return { ok: false, error: "MAIN helpers 未安装" };
-    const { sleep, norm, fireClick, waitFor, visible } = h;
+    const { sleep, norm, fireClick, visible } = h;
     const want = norm(name);
 
     const selectedText = () => {
@@ -535,28 +535,33 @@ export async function selectGroupChatInMainWorld(
     );
     if (!wrap) return { ok: false, error: "未找到「选择群聊」" };
 
-    const isGroupPop = (pop: HTMLElement) => {
-      const t = norm(pop.textContent || "");
-      if (t.includes("暂无群聊") || t.includes("我创建的群聊")) return true;
-      if (pop.querySelector(".item.custom-option")) return true;
-      if (t.includes("虚构演绎") || t.includes("笔记含AI")) return false;
-      if (
-        t.includes("公开可见") ||
-        t.includes("搜索地点") ||
-        t.includes("自主拍摄")
-      ) {
-        return false;
-      }
-      return false;
-    };
-
-    const findGroupPop = () => {
+    const findOptionsPop = () => {
       const pops = Array.from(
         document.querySelectorAll<HTMLElement>(
           ".d-popover.d-dropdown.custom-dropdown-44",
         ),
       );
-      return pops.find((p) => isGroupPop(p)) || null;
+      // 优先：已有真实选项 / 「我创建的群聊」
+      const withOpts = pops.find((p) => p.querySelector(".item.custom-option"));
+      if (withOpts) return withOpts;
+      return (
+        pops.find((p) => norm(p.textContent || "").includes("我创建的群聊")) ||
+        null
+      );
+    };
+
+    const findEmptyPop = () => {
+      const pops = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          ".d-popover.d-dropdown.custom-dropdown-44",
+        ),
+      );
+      return (
+        pops.find((p) => {
+          const t = norm(p.textContent || "");
+          return t.includes("暂无群聊") && !p.querySelector(".item.custom-option");
+        }) || null
+      );
     };
 
     const forceShowPop = (pop: HTMLElement) => {
@@ -570,62 +575,72 @@ export async function selectGroupChatInMainWorld(
     };
 
     wrap.scrollIntoView({ block: "center", inline: "nearest" });
-    await sleep(200);
+    await sleep(250);
+    // 先合成事件，再原生 click，触发 Vue 拉群列表
     fireClick(wrap);
-    await sleep(450);
+    wrap.click();
+    const main = wrap.querySelector<HTMLElement>(".d-select-main, .d-select");
+    if (main) main.click();
+    await sleep(400);
 
-    let pop = findGroupPop();
-    if (!pop) {
-      pop = await waitFor(() => findGroupPop(), 30);
-    }
-    if (!pop) return { ok: false, error: "未找到群聊下拉" };
-
-    // 下拉常驻但 display:none，始终强制显示再点选项
-    if (!visible(pop)) {
-      forceShowPop(pop);
+    // 等选项出现（不要立刻把常驻空态当最终结果）
+    let pop: HTMLElement | null = null;
+    let options: HTMLElement[] = [];
+    for (let i = 0; i < 40; i++) {
+      pop = findOptionsPop();
+      if (pop) {
+        options = Array.from(
+          pop.querySelectorAll<HTMLElement>(".item.custom-option"),
+        );
+        if (options.length) break;
+      }
       await sleep(150);
-    } else {
-      // 即便判定可见，也再补一次，避免被其它 popover 盖住
+    }
+
+    if (!options.length || !pop) {
+      // 仍无选项：若空态可见则跳过；绝不 forceShow 空态去「假装打开」
+      const empty = findEmptyPop();
+      if (empty && visible(empty)) {
+        document.body.click();
+        return { ok: true, skipped: true, error: "暂无群聊，已跳过" };
+      }
+      // 再试一次打开并短等
+      fireClick(wrap);
+      wrap.click();
+      await sleep(600);
+      pop = findOptionsPop();
+      options = pop
+        ? Array.from(pop.querySelectorAll<HTMLElement>(".item.custom-option"))
+        : [];
+      if (!options.length) {
+        document.body.click();
+        return { ok: true, skipped: true, error: "暂无群聊，已跳过" };
+      }
+    }
+
+    // 仅对「有选项」的 pop 必要时强制显示
+    if (pop && !visible(pop)) {
       forceShowPop(pop);
-      await sleep(80);
+      await sleep(120);
     }
 
-    if (norm(pop.textContent || "").includes("暂无群聊")) {
-      return { ok: true, skipped: true, error: "暂无群聊，已跳过" };
-    }
-
-    const options = await waitFor(() => {
-      const list = pop!.querySelectorAll<HTMLElement>(".item.custom-option");
-      return list.length ? (list[0] as HTMLElement) : null;
-    }, 30);
-    if (!options) {
-      return { ok: true, skipped: true, error: "群聊列表为空，已跳过" };
-    }
-
-    const allOptions = Array.from(
-      pop.querySelectorAll<HTMLElement>(".item.custom-option"),
-    );
     const target =
-      (want && allOptions.find((el) => optionName(el).includes(want))) ||
-      allOptions[0]!;
+      (want && options.find((el) => optionName(el).includes(want))) ||
+      options[0]!;
 
-    // 点选项本体 + 父级 grid-item，提高 Vue 命中率
-    fireClick(target);
-    await sleep(200);
+    // 选项必须用原生 click（与引用笔记同理）
+    target.click();
+    await sleep(150);
     const gridItem = target.closest<HTMLElement>(".d-grid-item");
-    if (gridItem) {
-      fireClick(gridItem);
-      await sleep(200);
-    }
+    if (gridItem) gridItem.click();
+    await sleep(200);
 
     for (let i = 0; i < 40; i++) {
       await sleep(120);
       const now = selectedText();
-      if (!isPlaceholder(now)) {
-        if (!want || now.includes(want)) {
-          console.info("[RedFlow] 已选群聊", { selected: now });
-          return { ok: true, selected: now };
-        }
+      if (!isPlaceholder(now) && (!want || now.includes(want))) {
+        console.info("[RedFlow] 已选群聊", { selected: now });
+        return { ok: true, selected: now };
       }
     }
     return {
@@ -639,8 +654,8 @@ export async function selectGroupChatInMainWorld(
 }
 
 /**
- * 引用笔记：点 .quote-note-container → 弹窗 .select-note-modal →
- * 点第一张 .note-card → 「确认引用」。
+ * 引用笔记：打开弹窗 → 第一张 .note-card 用原生 click → 「确认引用」原生 click。
+ * CDP 实测：fireClick 点封面不会选中；card.click() 才能选中并点亮确认。
  */
 export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickResult> {
   try {
@@ -669,7 +684,8 @@ export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickRe
     trigger.scrollIntoView({ block: "center", inline: "nearest" });
     await sleep(200);
     fireClick(trigger);
-    await sleep(600);
+    trigger.click();
+    await sleep(700);
 
     const modal = await waitFor(
       () => document.querySelector<HTMLElement>(".select-note-modal"),
@@ -681,7 +697,7 @@ export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickRe
       modal.querySelectorAll<HTMLElement>(".select-note-modal__tab"),
     ).find((el) => norm(el.textContent || "") === "我的笔记");
     if (myTab && !myTab.className.includes("active")) {
-      fireClick(myTab);
+      myTab.click();
       await sleep(400);
     }
 
@@ -696,54 +712,24 @@ export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickRe
       const cancel = Array.from(
         modal.querySelectorAll<HTMLElement>("button, .d-button"),
       ).find((el) => norm(el.textContent || "") === "取消");
-      if (cancel) fireClick(cancel);
+      if (cancel) cancel.click();
       return { ok: true, skipped: true, error: "没有可引用的笔记，已跳过" };
     }
 
-    const pickCard = async (el: HTMLElement) => {
-      const cover =
-        el.querySelector<HTMLElement>(
-          ".note-card__cover-img, .note-card__cover, img",
-        ) || el;
-      fireClick(cover);
-      await sleep(150);
-      fireClick(el);
-      await sleep(150);
-      const mask = el.querySelector<HTMLElement>(".note-card__hover-mask");
-      if (mask) {
-        fireClick(mask);
-        await sleep(100);
-      }
-      // 坐标命中再点一次
-      const rect = cover.getBoundingClientRect();
-      const x = rect.left + Math.max(rect.width / 2, 4);
-      const y = rect.top + Math.max(rect.height / 2, 4);
-      const hit = document
-        .elementsFromPoint(x, y)
-        .find((n) => (n as HTMLElement).closest?.(".note-card"));
-      if (hit) {
-        fireClick(
-          ((hit as HTMLElement).closest(".note-card") as HTMLElement) ||
-            (hit as HTMLElement),
-        );
-      }
-    };
-
-    // 已有选中态就用它；否则点第一张
+    // 关键：必须 note-card 原生 click；点封面 fireClick 无效
     let selected = modal.querySelector<HTMLElement>(".note-card--selected");
     if (!selected) {
-      await pickCard(card);
+      card.click();
       await sleep(350);
       selected = modal.querySelector<HTMLElement>(".note-card--selected");
     }
     if (!selected) {
-      // 再试一次第一张
-      await pickCard(card);
+      card.click();
       await sleep(400);
       selected = modal.querySelector<HTMLElement>(".note-card--selected");
     }
     if (!selected) {
-      return { ok: false, error: "未选中笔记，「确认引用」不可点" };
+      return { ok: false, error: "未选中第一篇笔记" };
     }
 
     const confirm = await waitFor(() => {
@@ -762,9 +748,9 @@ export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickRe
     }, 40);
 
     if (!confirm) {
-      return { ok: false, error: "未选中笔记，「确认引用」不可点" };
+      return { ok: false, error: "「确认引用」不可点（笔记未选中）" };
     }
-    fireClick(confirm);
+    confirm.click();
     await sleep(500);
 
     for (let i = 0; i < 40; i++) {
@@ -776,7 +762,7 @@ export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickRe
       }
     }
     return {
-      ok: Boolean(document.querySelector(".note-card--selected")),
+      ok: false,
       error: "已点确认引用但弹窗未关闭",
       selected: quoteText(),
     };
