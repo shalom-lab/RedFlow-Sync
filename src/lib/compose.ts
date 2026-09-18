@@ -45,8 +45,7 @@ export function listPublishTopics(
 /**
  * 拼接发布正文：
  * 🌈关键词 · 关键词
- * 👉获取方式：详见置顶笔记
- * ✅回复口令：xxx
+ * ✅回复关键词：xxx
  * #话题
  */
 export function composePublishBody(opts: {
@@ -61,7 +60,7 @@ export function composePublishBody(opts: {
   const lines: string[] = [
     keywords.length ? `🌈${keywords.join(" · ")}` : "🌈",
   ];
-  lines.push("👉获取方式：详见置顶笔记");
+  lines.push(`👉获取方式：详见置顶笔记`);
   if (opts.replyKeyword?.trim()) {
     lines.push(`✅回复口令：${opts.replyKeyword.trim()}`);
   }
