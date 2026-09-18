@@ -32,6 +32,7 @@ export function normalizeConfig(
   if (!merged.repo?.trim()) merged.repo = DEFAULT_CONFIG.repo;
   if (!merged.branch?.trim()) merged.branch = DEFAULT_CONFIG.branch;
   merged.dailyAutoPublish = Boolean(merged.dailyAutoPublish);
+  merged.declareAiContent = merged.declareAiContent !== false;
   merged.submitMode = merged.submitMode === "schedule" ? "schedule" : "draft";
   const plan = normalizeSchedulePlan({
     startHour: merged.scheduleStartHour,

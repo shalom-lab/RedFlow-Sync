@@ -240,6 +240,10 @@
   accent-color: var(--rf-accent);
 }
 
+.redflow-toggle-block {
+  margin-top: 4px;
+}
+
 .redflow-mode-row {
   display: grid;
   grid-template-columns: 1fr 1fr;

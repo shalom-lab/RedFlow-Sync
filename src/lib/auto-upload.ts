@@ -91,6 +91,7 @@ export async function runDraftToXiaohongshuDraft(
     imageRawUrl: item.imageRawUrl,
     collectionName: "ChatGPT美图",
     scheduledAt,
+    declareAiContent: cfg.declareAiContent,
   });
 
   if (!result.ok) return result;

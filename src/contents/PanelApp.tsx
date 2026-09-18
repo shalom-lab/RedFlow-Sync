@@ -578,6 +578,7 @@ export function PanelApp() {
         scheduleMinLeadHours: settingsForm.scheduleMinLeadHours,
         scheduleMaxAheadDays: settingsForm.scheduleMaxAheadDays,
         pace: normalizePace(settingsForm.pace),
+        declareAiContent: settingsForm.declareAiContent !== false,
       };
 
       skipConfigReloadRef.current = true;
@@ -1175,6 +1176,20 @@ export function PanelApp() {
                 页面上不会勾选「定时发布」，只把笔记存成创作者草稿。
               </p>
             )}
+
+            <label className="redflow-toggle redflow-toggle-block">
+              <input
+                type="checkbox"
+                checked={settingsForm.declareAiContent !== false}
+                onChange={(e) =>
+                  persistSettingsPatch({ declareAiContent: e.target.checked })
+                }
+              />
+              <span>声明「笔记含AI合成内容」</span>
+            </label>
+            <p className="redflow-settings-hint">
+              默认开启。导入时会点「添加内容类型声明」→「笔记含AI合成内容」。
+            </p>
           </section>
 
           <section className="redflow-settings-section">

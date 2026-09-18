@@ -58,6 +58,8 @@ export interface ExtensionConfig {
   scheduleMaxAheadDays: number;
   /** 各步停顿（毫秒），默认见 DEFAULT_PACE_MS */
   pace: PaceConfig;
+  /** 填表时在「添加内容类型声明」里选「笔记含AI合成内容」 */
+  declareAiContent: boolean;
 }
 
 /** 本地缓存使用的固定分类名（后续按 Prompt 配图仍挂在此分类下） */
@@ -84,6 +86,7 @@ export const DEFAULT_CONFIG: ExtensionConfig = {
   scheduleMinLeadHours: 2,
   scheduleMaxAheadDays: 14,
   pace: { ...DEFAULT_PACE_MS },
+  declareAiContent: true,
 };
 
 /** UI 用：`owner/repo`；也接受完整 GitHub URL */
