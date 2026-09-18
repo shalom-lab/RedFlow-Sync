@@ -1402,7 +1402,7 @@ export function PanelApp() {
                       type="number"
                       min={50}
                       max={20000}
-                      step={50}
+                      step={1}
                       value={settingsForm.pace?.[key] ?? DEFAULT_PACE_MS[key]}
                       onChange={(e) => persistPaceField(key, e.target.value)}
                     />
