@@ -33,8 +33,8 @@ export function normalizeConfig(
   if (!merged.branch?.trim()) merged.branch = DEFAULT_CONFIG.branch;
   merged.dailyAutoPublish = Boolean(merged.dailyAutoPublish);
   merged.declareAiContent = merged.declareAiContent !== false;
-  merged.groupChatEnabled = merged.groupChatEnabled !== false;
-  merged.quoteNoteEnabled = merged.quoteNoteEnabled !== false;
+  merged.groupChatEnabled = merged.groupChatEnabled === true;
+  merged.quoteNoteEnabled = merged.quoteNoteEnabled === true;
   merged.collectionName =
     merged.collectionName?.trim() || DEFAULT_CONFIG.collectionName;
   merged.groupChatName =

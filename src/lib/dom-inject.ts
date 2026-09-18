@@ -1630,7 +1630,7 @@ export async function fillPublishText(params: {
 
   await waitPace("menu");
 
-  if (params.groupChatEnabled !== false) {
+  if (params.groupChatEnabled === true) {
     try {
       const group = await selectGroupChat(params.groupChatName || "");
       steps.groupChat = Boolean(group.ok && !group.skipped);
@@ -1648,7 +1648,7 @@ export async function fillPublishText(params: {
     steps.groupChat = true;
   }
 
-  if (params.quoteNoteEnabled !== false) {
+  if (params.quoteNoteEnabled === true) {
     try {
       const quote = await selectQuoteNoteFirst();
       steps.quoteNote = Boolean(quote.ok && !quote.skipped);

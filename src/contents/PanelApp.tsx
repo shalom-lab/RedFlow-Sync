@@ -647,9 +647,9 @@ export function PanelApp() {
         declareAiContent: settingsForm.declareAiContent !== false,
         collectionName:
           settingsForm.collectionName.trim() || DEFAULT_COLLECTION_NAME,
-        groupChatEnabled: settingsForm.groupChatEnabled !== false,
+        groupChatEnabled: settingsForm.groupChatEnabled === true,
         groupChatName: settingsForm.groupChatName.trim(),
-        quoteNoteEnabled: settingsForm.quoteNoteEnabled !== false,
+        quoteNoteEnabled: settingsForm.quoteNoteEnabled === true,
         requiredTopics:
           settingsForm.requiredTopics.trim() || DEFAULT_REQUIRED_TOPICS,
       };
@@ -1304,14 +1304,14 @@ export function PanelApp() {
             <label className="redflow-toggle redflow-toggle-block">
               <input
                 type="checkbox"
-                checked={settingsForm.groupChatEnabled !== false}
+                checked={settingsForm.groupChatEnabled === true}
                 onChange={(e) =>
                   persistSettingsPatch({ groupChatEnabled: e.target.checked })
                 }
               />
               <span>选择群聊</span>
             </label>
-            {settingsForm.groupChatEnabled !== false ? (
+            {settingsForm.groupChatEnabled === true ? (
               <label className="redflow-label">
                 群聊名称（空=第一项）
                 <input
@@ -1328,7 +1328,7 @@ export function PanelApp() {
             <label className="redflow-toggle redflow-toggle-block">
               <input
                 type="checkbox"
-                checked={settingsForm.quoteNoteEnabled !== false}
+                checked={settingsForm.quoteNoteEnabled === true}
                 onChange={(e) =>
                   persistSettingsPatch({ quoteNoteEnabled: e.target.checked })
                 }

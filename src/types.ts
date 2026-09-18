@@ -104,9 +104,9 @@ export const DEFAULT_CONFIG: ExtensionConfig = {
   pace: { ...DEFAULT_PACE_MS },
   declareAiContent: true,
   collectionName: DEFAULT_COLLECTION_NAME,
-  groupChatEnabled: true,
+  groupChatEnabled: false,
   groupChatName: "",
-  quoteNoteEnabled: true,
+  quoteNoteEnabled: false,
   requiredTopics: DEFAULT_REQUIRED_TOPICS,
 };
 
