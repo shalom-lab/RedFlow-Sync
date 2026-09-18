@@ -624,16 +624,61 @@ export async function selectGroupChatInMainWorld(
       await sleep(120);
     }
 
+    // 固定第一项（name 为空时）；有 name 才按名匹配
     const target =
       (want && options.find((el) => optionName(el).includes(want))) ||
       options[0]!;
 
-    // 选项必须用原生 click（与引用笔记同理）
-    target.click();
-    await sleep(150);
-    const gridItem = target.closest<HTMLElement>(".d-grid-item");
-    if (gridItem) gridItem.click();
-    await sleep(200);
+    // 同「暂存离开」：坐标 + elementsFromPoint + 完整 pointer/mouse
+    const fireAt = (el: HTMLElement, x: number, y: number) => {
+      const common: MouseEventInit = {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        view: window,
+        clientX: x,
+        clientY: y,
+        screenX: x,
+        screenY: y,
+        button: 0,
+        buttons: 1,
+      };
+      el.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          ...common,
+          pointerId: 1,
+          pointerType: "mouse",
+          isPrimary: true,
+        }),
+      );
+      el.dispatchEvent(new MouseEvent("mousedown", common));
+      el.dispatchEvent(
+        new PointerEvent("pointerup", {
+          ...common,
+          pointerId: 1,
+          pointerType: "mouse",
+          isPrimary: true,
+          buttons: 0,
+        }),
+      );
+      el.dispatchEvent(new MouseEvent("mouseup", { ...common, buttons: 0 }));
+      el.dispatchEvent(new MouseEvent("click", { ...common, buttons: 0 }));
+      if (typeof el.click === "function") el.click();
+    };
+
+    target.scrollIntoView({ block: "nearest", inline: "nearest" });
+    await sleep(80);
+    const tr = target.getBoundingClientRect();
+    const tx = tr.left + tr.width / 2;
+    const ty = tr.top + tr.height / 2;
+    const hit =
+      document
+        .elementsFromPoint(tx, ty)
+        .find((n) =>
+          Boolean((n as HTMLElement).closest?.(".item.custom-option")),
+        ) || target;
+    fireAt(hit as HTMLElement, tx, ty);
+    await sleep(250);
 
     for (let i = 0; i < 40; i++) {
       await sleep(120);
@@ -654,8 +699,8 @@ export async function selectGroupChatInMainWorld(
 }
 
 /**
- * 引用笔记：打开弹窗 → 选中第一张笔记 → 「确认引用」。
- * 成功标准以「确认引用」可点为准（比看 --selected class 更稳）。
+ * 引用笔记：固定选「我的笔记」第一张 + 「确认引用」。
+ * 点击思路对齐「暂存离开」：算中心坐标 → elementsFromPoint 取命中节点 → 完整 pointer/mouse 序列。
  */
 export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickResult> {
   try {
@@ -675,6 +720,64 @@ export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickRe
       return { ok: true, selected: already };
     }
 
+    const fireAt = (el: HTMLElement, x: number, y: number) => {
+      const common: MouseEventInit = {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        view: window,
+        clientX: x,
+        clientY: y,
+        screenX: x,
+        screenY: y,
+        button: 0,
+        buttons: 1,
+      };
+      el.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          ...common,
+          pointerId: 1,
+          pointerType: "mouse",
+          isPrimary: true,
+        }),
+      );
+      el.dispatchEvent(new MouseEvent("mousedown", common));
+      el.dispatchEvent(
+        new PointerEvent("pointerup", {
+          ...common,
+          pointerId: 1,
+          pointerType: "mouse",
+          isPrimary: true,
+          buttons: 0,
+        }),
+      );
+      el.dispatchEvent(new MouseEvent("mouseup", { ...common, buttons: 0 }));
+      el.dispatchEvent(new MouseEvent("click", { ...common, buttons: 0 }));
+      if (typeof el.click === "function") el.click();
+    };
+
+    const pointClick = (
+      el: HTMLElement,
+      pred?: (hit: Element) => boolean,
+    ): boolean => {
+      const r = el.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4) return false;
+      const points = [
+        [r.left + r.width / 2, r.top + r.height / 2],
+        [r.left + r.width * 0.35, r.top + r.height * 0.4],
+        [r.left + r.width * 0.65, r.top + r.height * 0.35],
+      ] as const;
+      for (const [x, y] of points) {
+        const stack = document.elementsFromPoint(x, y);
+        const hit = stack.find((n) => (pred ? pred(n) : true));
+        if (!hit) continue;
+        fireAt(hit as HTMLElement, x, y);
+        return true;
+      }
+      fireAt(el, r.left + r.width / 2, r.top + r.height / 2);
+      return true;
+    };
+
     const staleClose = document.querySelector<HTMLElement>(
       ".select-note-modal .d-modal-close",
     );
@@ -690,8 +793,8 @@ export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickRe
     if (!trigger) return { ok: false, error: "未找到「引用笔记」" };
 
     trigger.scrollIntoView({ block: "center", inline: "nearest" });
-    await sleep(300);
-    trigger.click();
+    await sleep(250);
+    pointClick(trigger);
     await sleep(900);
 
     const modal = await waitFor(
@@ -704,7 +807,7 @@ export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickRe
       modal.querySelectorAll<HTMLElement>(".select-note-modal__tab"),
     ).find((el) => norm(el.textContent || "") === "我的笔记");
     if (myTab && !String(myTab.className).includes("active")) {
-      myTab.click();
+      pointClick(myTab);
       await sleep(500);
     }
 
@@ -717,15 +820,14 @@ export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickRe
       const title = norm(
         el.querySelector(".note-card__title")?.textContent || "",
       );
-      if (r.width < 40 || r.height < 40) return null;
-      if (!title) return null;
+      if (r.width < 40 || r.height < 40 || !title) return null;
       return el;
     }, 70);
     if (!card) {
       const cancel = Array.from(
         modal.querySelectorAll<HTMLElement>("button, .d-button"),
       ).find((el) => norm(el.textContent || "") === "取消");
-      if (cancel) cancel.click();
+      if (cancel) pointClick(cancel);
       return { ok: true, skipped: true, error: "没有可引用的笔记，已跳过" };
     }
 
@@ -740,48 +842,19 @@ export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickRe
         return true;
       }) || null;
 
-    const clickCard = (el: HTMLElement) => {
-      const r = el.getBoundingClientRect();
-      const x = r.left + Math.max(r.width / 2, 4);
-      const y = r.top + Math.max(r.height / 2, 4);
-      const common: MouseEventInit = {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        view: window,
-        clientX: x,
-        clientY: y,
-        screenX: x,
-        screenY: y,
-        button: 0,
-        buttons: 1,
-      };
-      el.dispatchEvent(new MouseEvent("mousedown", common));
-      el.dispatchEvent(new MouseEvent("mouseup", { ...common, buttons: 0 }));
-      el.dispatchEvent(new MouseEvent("click", { ...common, buttons: 0 }));
-      el.click();
-    };
-
-    let confirm: HTMLElement | null = findEnabledConfirm();
-    if (!confirm) {
-      const titleEl = card.querySelector<HTMLElement>(".note-card__title");
-      const coverEl = card.querySelector<HTMLElement>(
-        ".note-card__cover, .note-card__cover-img, img",
+    // 固定第一张：坐标打到 note-card 上（同暂存离开思路）
+    let confirm = findEnabledConfirm();
+    for (let attempt = 0; attempt < 6 && !confirm; attempt++) {
+      card.scrollIntoView({ block: "center", inline: "nearest" });
+      await sleep(100);
+      pointClick(
+        card,
+        (n) => Boolean((n as HTMLElement).closest?.(".note-card")),
       );
-      const targets = [card, titleEl, coverEl, card].filter(
-        (x): x is HTMLElement => Boolean(x),
-      );
-
-      for (let attempt = 0; attempt < 8 && !confirm; attempt++) {
-        const t = targets[attempt % targets.length]!;
-        t.scrollIntoView({ block: "center", inline: "nearest" });
-        await sleep(80);
-        clickCard(t);
-        for (let j = 0; j < 12; j++) {
-          await sleep(120);
-          confirm = findEnabledConfirm();
-          if (confirm) break;
-        }
+      for (let j = 0; j < 15; j++) {
+        await sleep(120);
+        confirm = findEnabledConfirm();
+        if (confirm) break;
       }
     }
 
@@ -789,14 +862,13 @@ export async function selectQuoteNoteFirstInMainWorld(): Promise<MainWorldPickRe
       const cancel = Array.from(
         modal.querySelectorAll<HTMLElement>("button, .d-button"),
       ).find((el) => norm(el.textContent || "") === "取消");
-      if (cancel) cancel.click();
-      return {
-        ok: false,
-        error: "未选中第一篇笔记，确认引用不可点",
-      };
+      if (cancel) pointClick(cancel);
+      return { ok: false, error: "未选中第一篇笔记，确认引用不可点" };
     }
 
-    confirm.click();
+    pointClick(confirm, (n) =>
+      norm((n as HTMLElement).textContent || "").includes("确认引用"),
+    );
     await sleep(600);
 
     for (let i = 0; i < 50; i++) {
