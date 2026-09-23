@@ -73,6 +73,10 @@ export interface ExtensionConfig {
    * 会与草稿 keywords 合并去重
    */
   requiredTopics: string;
+  /**
+   * 小红书正文模板（多行）。占位符：`{keywords}` `{replyKeyword}` `{topics}`
+   */
+  bodyTemplate: string;
 }
 
 /** 本地缓存使用的固定分类名（后续按 Prompt 配图仍挂在此分类下） */
@@ -86,6 +90,14 @@ export const DEFAULT_IMAGES_PATH = "infoflow-data/Images/Prompt";
 
 export const DEFAULT_COLLECTION_NAME = "ChatGPT美图";
 export const DEFAULT_REQUIRED_TOPICS = "图美AI,ChatGPT,AI作图提示词";
+
+/** 小红书正文默认模板（设置里可改） */
+export const DEFAULT_BODY_TEMPLATE = [
+  "🌈{keywords}",
+  "👉提示词获取方式：详见置顶笔记",
+  "✅回复口令：{replyKeyword}",
+  "{topics}",
+].join("\n");
 
 export const DEFAULT_CONFIG: ExtensionConfig = {
   githubToken: "",
@@ -108,6 +120,7 @@ export const DEFAULT_CONFIG: ExtensionConfig = {
   groupChatName: "",
   quoteNoteEnabled: false,
   requiredTopics: DEFAULT_REQUIRED_TOPICS,
+  bodyTemplate: DEFAULT_BODY_TEMPLATE,
 };
 
 /** UI 用：`owner/repo`；也接受完整 GitHub URL */

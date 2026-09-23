@@ -1,4 +1,4 @@
-import { getConfig } from "@/lib/storage";
+import { getConfig, bumpImportAfter } from "@/lib/storage";
 import { hasGitHubAccess } from "@/lib/permissions";
 import {
   getImageArrayBuffer,
@@ -551,6 +551,7 @@ chrome.runtime.onMessage.addListener(
             } satisfies RedFlowResponse);
             return;
           }
+          await bumpImportAfter(message.fileId);
           // 配图留在 IndexedDB，历史页可点开查看
           reply({
             ok: true,

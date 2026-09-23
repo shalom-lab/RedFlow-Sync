@@ -1,8 +1,10 @@
 import {
+  DEFAULT_BODY_TEMPLATE,
   DEFAULT_CONFIG,
   type ExtensionConfig,
   type UploadHistory,
 } from "@/types";
+import { compareFileIdTime } from "./draft-time";
 import { itemKey } from "./keys";
 import { normalizePace } from "./pace";
 import { normalizeSchedulePlan } from "./schedule";
@@ -10,6 +12,8 @@ import { normalizeSchedulePlan } from "./schedule";
 const CONFIG_KEY = "redflow_config";
 const HISTORY_KEY = "redflow_upload_history";
 const DAILY_AUTO_DATE_KEY = "redflow_daily_auto_date";
+/** 导入起点门槛（跨设备 sync，仅存这一条字符串） */
+const IMPORT_AFTER_KEY = "redflow_import_after";
 
 export function normalizeConfig(
   raw?: Partial<ExtensionConfig> | null,
@@ -41,6 +45,10 @@ export function normalizeConfig(
     typeof merged.groupChatName === "string" ? merged.groupChatName.trim() : "";
   merged.requiredTopics =
     merged.requiredTopics?.trim() || DEFAULT_CONFIG.requiredTopics;
+  merged.bodyTemplate =
+    typeof merged.bodyTemplate === "string" && merged.bodyTemplate.trim()
+      ? merged.bodyTemplate
+      : DEFAULT_BODY_TEMPLATE;
   merged.submitMode = merged.submitMode === "schedule" ? "schedule" : "draft";
   const plan = normalizeSchedulePlan({
     startHour: merged.scheduleStartHour,
@@ -123,6 +131,30 @@ export async function setDailyAutoDate(date: string): Promise<void> {
 
 export async function clearDailyAutoDate(): Promise<void> {
   await chrome.storage.local.remove(DAILY_AUTO_DATE_KEY);
+}
+
+export async function getImportAfter(): Promise<string> {
+  const result = await chrome.storage.sync.get(IMPORT_AFTER_KEY);
+  return String(result[IMPORT_AFTER_KEY] ?? "").trim();
+}
+
+export async function setImportAfter(value: string): Promise<void> {
+  const v = value.trim();
+  if (!v) {
+    await chrome.storage.sync.remove(IMPORT_AFTER_KEY);
+    return;
+  }
+  await chrome.storage.sync.set({ [IMPORT_AFTER_KEY]: v });
+}
+
+/** 仅当 fileId 新于当前门槛时推进；返回是否写入 */
+export async function bumpImportAfter(fileId: string): Promise<boolean> {
+  const id = fileId.trim();
+  if (!id) return false;
+  const cur = await getImportAfter();
+  if (cur && compareFileIdTime(id, cur) <= 0) return false;
+  await setImportAfter(id);
+  return true;
 }
 
 export function parseCategories(raw: string): string[] {

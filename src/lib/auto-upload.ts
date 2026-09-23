@@ -2,6 +2,7 @@
  * 单条草稿 → 小红书「暂存离开」完整流水线，以及顺序自动化队列。
  */
 import { composePublishBody, listPublishTopics } from "./compose";
+import { isAfterImportAfter } from "./draft-time";
 import { planAllowedPublishAt } from "./schedule";
 import {
   clickFooterOnTab,
@@ -71,6 +72,7 @@ export async function runDraftToXiaohongshuDraft(
     keywords: item.keywords,
     replyKeyword: item.replyKeyword,
     requiredTopics: cfg.requiredTopics,
+    bodyTemplate: cfg.bodyTemplate,
   });
   const topics = listPublishTopics(item.keywords, cfg.requiredTopics);
   const scheduledAt =
@@ -157,14 +159,20 @@ export async function runDraftToXiaohongshuDraft(
   };
 }
 
-/** 未入库小红书草稿的条目，按 id（时间戳前缀）从旧到新 */
+/** 未入库小红书草稿的条目，按 id（时间戳前缀）从旧到新；可按导入起点过滤 */
 export function pickOldestPending(
   items: Array<DraftUploadInput & { uploaded?: boolean }>,
+  importAfter?: string | null,
 ): DraftUploadInput[] {
   return items
-    .filter((it) => !it.uploaded)
+    .filter(
+      (it) =>
+        !it.uploaded && isAfterImportAfter(it.fileId, importAfter),
+    )
     .slice()
-    .sort((a, b) => a.fileId.localeCompare(b.fileId, undefined, { numeric: true }));
+    .sort((a, b) =>
+      a.fileId.localeCompare(b.fileId, undefined, { numeric: true }),
+    );
 }
 
 export type AutoUploadProgress = {

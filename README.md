@@ -121,13 +121,22 @@ npm run build       # 先清空 dist，再 tsc + vite
 | `id` | 草稿 ID，对应 Prompt / 配图 |
 | `wechat_title` | 小红书标题 |
 | `keywords` | 正文摘要与额外话题 |
-| `reply_keyword` | `👉获取方式：详见置顶笔记` + `✅回复口令：…` |
+| `reply_keyword` | 填入模板占位符 `{replyKeyword}` |
 
-正文示例：
+正文默认模板（设置里可改）：
+
+```
+🌈{keywords}
+👉提示词获取方式：详见置顶笔记
+✅回复口令：{replyKeyword}
+{topics}
+```
+
+示例：
 
 ```
 🌈像素风 · 8-bit
-👉获取方式：详见置顶笔记
+👉提示词获取方式：详见置顶笔记
 ✅回复口令：像素艺术
 #图美AI #ChatGPT #美图提示词 #像素风
 ```

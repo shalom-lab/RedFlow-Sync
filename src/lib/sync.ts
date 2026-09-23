@@ -122,10 +122,11 @@ export function extractDraftItems(data: unknown): WechatDraftItem[] {
   return out;
 }
 
-function draftBody(item: WechatDraftItem): string {
+function draftBody(item: WechatDraftItem, bodyTemplate?: string): string {
   return composePublishBody({
     keywords: item.keywords,
     replyKeyword: item.reply_keyword,
+    bodyTemplate,
   });
 }
 
@@ -331,7 +332,7 @@ export async function runIncrementalSync(
           fileId: draft.id,
           category: DRAFTS_CATEGORY,
           title: draft.wechat_title || `【草稿】${draft.id}`,
-          body: draftBody(draft),
+          body: draftBody(draft, config.bodyTemplate),
           keywords: draft.keywords,
           replyKeyword: draft.reply_keyword,
           imagePath,

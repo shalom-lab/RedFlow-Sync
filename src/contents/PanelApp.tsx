@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   DEFAULT_CONFIG,
+  DEFAULT_BODY_TEMPLATE,
   DEFAULT_COLLECTION_NAME,
   DEFAULT_DRAFTS_FILE,
   DEFAULT_IMAGES_PATH,
@@ -20,6 +21,13 @@ import {
   type AutoUploadProgress,
   type DraftUploadInput,
 } from "@/lib/auto-upload";
+import {
+  dateInputToImportAfter,
+  formatDraftTime,
+  importAfterToDateInput,
+  isAfterImportAfter,
+  maxUploadedFileId,
+} from "@/lib/draft-time";
 import { getCategoryList } from "@/lib/github";
 import {
   sendRedFlow,
@@ -30,10 +38,12 @@ import {
   clearUploadHistory,
   getConfig,
   getDailyAutoDate,
+  getImportAfter,
   localDateKey,
   normalizeConfig,
   saveConfig,
   setDailyAutoDate,
+  setImportAfter,
 } from "@/lib/storage";
 import { hasGitHubAccess, requestGitHubAccess } from "@/lib/permissions";
 import { hasPublishTabOpen } from "@/lib/page-bridge";
@@ -57,14 +67,17 @@ function isConfigReady(cfg: ExtensionConfig): boolean {
   return Boolean(cfg.owner.trim() && cfg.repo.trim());
 }
 
-/** 草稿 id 时间戳小字展示：2026-01-02T11-23-14-833Z-xxx → 2026-01-02 11:23 */
-/** 草稿 id 时间戳小字展示：2026-01-02T11-23-14-833Z-xxx → 2026-01-02 11:23 */
-function formatDraftTime(fileId: string): string {
-  const m = fileId.match(
-    /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})(?:-(\d+))?Z?/i,
-  );
-  if (m) return `${m[1]} ${m[2]}:${m[3]}`;
-  return fileId.length > 22 ? `${fileId.slice(0, 20)}…` : fileId;
+function sortPanelItems(
+  list: PanelItem[],
+  importAfter: string,
+): PanelItem[] {
+  return list.slice().sort((a, b) => {
+    const aElig = !a.uploaded && isAfterImportAfter(a.fileId, importAfter);
+    const bElig = !b.uploaded && isAfterImportAfter(b.fileId, importAfter);
+    if (aElig !== bElig) return aElig ? -1 : 1;
+    if (a.uploaded !== b.uploaded) return Number(a.uploaded) - Number(b.uploaded);
+    return a.fileId.localeCompare(b.fileId, undefined, { numeric: true });
+  });
 }
 
 function formatUploadTime(iso: string | null): string {
@@ -162,6 +175,7 @@ export function PanelApp() {
   const [dangerConfirm, setDangerConfirm] = useState<null | "flags" | "drafts">(
     null,
   );
+  const [importAfter, setImportAfterState] = useState("");
   const emptyPollRef = useRef(0);
   const toastTimerRef = useRef<number | null>(null);
   const wipeTimerRef = useRef<number | null>(null);
@@ -173,10 +187,12 @@ export function PanelApp() {
   const autoRunningRef = useRef(false);
   const dailyKickRef = useRef(false);
   const syncPollRef = useRef<number | null>(null);
+  const importAfterRef = useRef("");
   categoryRef.current = category;
   itemsRef.current = items;
   busyRef.current = busyId;
   autoRunningRef.current = autoRunning;
+  importAfterRef.current = importAfter;
 
   /** 测试阶段：错误钉在顶部，不自动消失 */
   const showError = (msg: string) => {
@@ -199,6 +215,28 @@ export function PanelApp() {
     };
   }, []);
 
+  useEffect(() => {
+    const onStorage = (
+      changes: { [key: string]: chrome.storage.StorageChange },
+      area: string,
+    ) => {
+      if (area !== "sync" || !changes.redflow_import_after) return;
+      const next = String(changes.redflow_import_after.newValue ?? "").trim();
+      setImportAfterState(next);
+      setItems((prev) => sortPanelItems(prev, next));
+    };
+    chrome.storage.onChanged.addListener(onStorage);
+    return () => chrome.storage.onChanged.removeListener(onStorage);
+  }, []);
+
+  const onImportAfterDateChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    const next = raw ? dateInputToImportAfter(raw) : "";
+    await setImportAfter(next);
+    setImportAfterState(next);
+    setItems((prev) => sortPanelItems(prev, next));
+  };
+
   const loadFromLocal = useCallback(async (cat: string) => {
     if (!cat) {
       setItems([]);
@@ -219,14 +257,22 @@ export function PanelApp() {
       if (res.status.lastError && !res.items.length) {
         setError(res.status.lastError);
       }
-      const mapped: PanelItem[] = res.items
-        .map((it) => ({
-          ...it,
-          uploaded: Boolean(it.uploaded),
-          uploadedAt: it.uploadedAt ?? null,
-        }))
-        .sort((a, b) => Number(a.uploaded) - Number(b.uploaded));
-      setItems(mapped);
+      const mapped: PanelItem[] = res.items.map((it) => ({
+        ...it,
+        uploaded: Boolean(it.uploaded),
+        uploadedAt: it.uploadedAt ?? null,
+      }));
+      let after = await getImportAfter();
+      if (!after) {
+        const maxId = maxUploadedFileId(mapped);
+        if (maxId) {
+          await setImportAfter(maxId);
+          after = maxId;
+        }
+      }
+      if (gen !== loadGenRef.current) return;
+      setImportAfterState(after);
+      setItems(sortPanelItems(mapped, after));
 
       // 空列表且后台仍在 sync：短暂补拉几次（主清理靠上面的 sync 状态轮询）
       if (
@@ -415,11 +461,16 @@ export function PanelApp() {
 
       if (result.ok) {
         const uploadedAt = new Date().toISOString();
+        const after = await getImportAfter();
+        setImportAfterState(after);
         setItems((prev) =>
-          prev.map((x) =>
-            x.fileId === item.fileId && x.category === item.category
-              ? { ...x, uploaded: true, uploadedAt, hasImage: true }
-              : x,
+          sortPanelItems(
+            prev.map((x) =>
+              x.fileId === item.fileId && x.category === item.category
+                ? { ...x, uploaded: true, uploadedAt, hasImage: true }
+                : x,
+            ),
+            after,
           ),
         );
         const sched = result.steps?.scheduledAt
@@ -491,13 +542,19 @@ export function PanelApp() {
         setAutoProgress(progress);
         if (result.ok) {
           const uploadedAt = new Date().toISOString();
-          setItems((prev) =>
-            prev.map((x) =>
-              x.fileId === item.fileId && x.category === item.category
-                ? { ...x, uploaded: true, uploadedAt, hasImage: true }
-                : x,
-            ),
-          );
+          void getImportAfter().then((after) => {
+            setImportAfterState(after);
+            setItems((prev) =>
+              sortPanelItems(
+                prev.map((x) =>
+                  x.fileId === item.fileId && x.category === item.category
+                    ? { ...x, uploaded: true, uploadedAt, hasImage: true }
+                    : x,
+                ),
+                after,
+              ),
+            );
+          });
           if (result.error) {
             showError(`${item.fileId} 已处理，但有警告：${result.error}`);
           }
@@ -533,9 +590,12 @@ export function PanelApp() {
       showToast("请先配置仓库");
       return;
     }
-    const pending = pickOldestPending(toUploadInputs(items));
+    const pending = pickOldestPending(
+      toUploadInputs(items),
+      importAfterRef.current,
+    );
     if (!pending.length) {
-      showToast("没有未暂存的草稿");
+      showToast("没有可导入的草稿（检查导入起点）");
       return;
     }
     const queue = takeBatchMultiple(pending, AUTO_BATCH_SIZE);
@@ -652,6 +712,8 @@ export function PanelApp() {
         quoteNoteEnabled: settingsForm.quoteNoteEnabled === true,
         requiredTopics:
           settingsForm.requiredTopics.trim() || DEFAULT_REQUIRED_TOPICS,
+        bodyTemplate:
+          settingsForm.bodyTemplate.trim() || DEFAULT_BODY_TEMPLATE,
       };
 
       skipConfigReloadRef.current = true;
@@ -770,7 +832,10 @@ export function PanelApp() {
       const last = await getDailyAutoDate();
       if (last === localDateKey()) return;
       if (!(await hasPublishTabOpen())) return;
-      const pending = pickOldestPending(toUploadInputs(itemsRef.current));
+      const pending = pickOldestPending(
+        toUploadInputs(itemsRef.current),
+        importAfterRef.current,
+      );
       const queue = takeDailyBatch(pending, AUTO_BATCH_SIZE);
       if (!queue.length) return;
       dailyKickRef.current = true;
@@ -861,11 +926,35 @@ export function PanelApp() {
             <span className="redflow-label">微信图文草稿</span>
             <span className="redflow-muted">
               {items.length
-                ? `${items.length} 条 · 未传 ${items.filter((i) => !i.uploaded).length} · 已传 ${items.filter((i) => i.uploaded).length}`
+                ? `${items.length} 条 · 未传 ${items.filter((i) => !i.uploaded).length} · 可导 ${items.filter((i) => !i.uploaded && isAfterImportAfter(i.fileId, importAfter)).length} · 已传 ${items.filter((i) => i.uploaded).length}`
                 : "同步后显示"}
               {autoProgress
                 ? ` · 自动 ${autoProgress.current}/${autoProgress.total}`
                 : ""}
+            </span>
+          </div>
+
+          <div className="redflow-cutoff-bar">
+            <div className="redflow-cutoff-row">
+              <div className="redflow-cutoff-copy">
+                <span className="redflow-cutoff-title">导入起点</span>
+                <span className="redflow-cutoff-hint">
+                  仅此日期之后可导入 · 发布后自动更新
+                </span>
+              </div>
+              <label className="redflow-cutoff-control">
+                <span className="redflow-sr-only">导入起点日期</span>
+                <input
+                  type="date"
+                  className="redflow-cutoff-date"
+                  value={importAfterToDateInput(importAfter)}
+                  onChange={(e) => void onImportAfterDateChange(e)}
+                  disabled={showSyncChrome || autoRunning}
+                />
+              </label>
+            </div>
+            <span className="redflow-cutoff-badge" title="保存在 Chrome 同步存储">
+              Sync
             </span>
           </div>
 
@@ -932,10 +1021,13 @@ export function PanelApp() {
                   本地暂无草稿，点底部「同步」拉取 wechat_newspic_drafts.json
                 </div>
               )}
-            {items.map((item) => (
+            {items.map((item) => {
+              const beforeCutoff =
+                !item.uploaded && !isAfterImportAfter(item.fileId, importAfter);
+              return (
               <article
                 key={`${item.category}::${item.fileId}`}
-                className={`redflow-card ${item.uploaded ? "is-synced" : ""}`}
+                className={`redflow-card ${item.uploaded ? "is-synced" : ""} ${beforeCutoff ? "is-before-cutoff" : ""}`}
               >
                 <h3 className="redflow-card-title" title={item.title}>
                   {item.title}
@@ -967,7 +1059,13 @@ export function PanelApp() {
                       type="button"
                       className="redflow-btn redflow-btn-sm"
                       disabled={
-                        busyId != null || showSyncChrome || autoRunning
+                        beforeCutoff ||
+                        busyId != null ||
+                        showSyncChrome ||
+                        autoRunning
+                      }
+                      title={
+                        beforeCutoff ? "早于导入起点，调整日期后可导入" : undefined
                       }
                       onClick={() => void onImport(item)}
                     >
@@ -976,7 +1074,8 @@ export function PanelApp() {
                   )}
                 </div>
               </article>
-            ))}
+              );
+            })}
           </div>
 
           <footer className="redflow-footer redflow-footer-multi">
@@ -1299,6 +1398,23 @@ export function PanelApp() {
             </label>
             <p className="redflow-settings-hint">
               正文末尾会写成 #话题，并与草稿 keywords 合并。默认含 #AI作图提示词。
+            </p>
+
+            <label className="redflow-label">
+              正文模板
+              <textarea
+                className="redflow-input redflow-textarea"
+                rows={5}
+                spellCheck={false}
+                placeholder={DEFAULT_BODY_TEMPLATE}
+                value={settingsForm.bodyTemplate}
+                onChange={(e) =>
+                  persistSettingsPatch({ bodyTemplate: e.target.value })
+                }
+              />
+            </label>
+            <p className="redflow-settings-hint">
+              占位符：{"{keywords}"}、{"{replyKeyword}"}、{"{topics}"}。空则恢复默认。
             </p>
 
             <label className="redflow-toggle redflow-toggle-block">

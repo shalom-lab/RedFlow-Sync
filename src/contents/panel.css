@@ -182,6 +182,128 @@
   padding: 12px 14px 8px;
 }
 
+.redflow-cutoff-bar {
+  position: relative;
+  margin: 0 12px 10px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #fecdd3;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fff1f2 0%, #fff7ed 100%);
+  box-shadow: 0 1px 2px rgba(225, 29, 72, 0.05);
+}
+
+.redflow-cutoff-row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.redflow-cutoff-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.redflow-cutoff-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--rf-ink);
+  white-space: nowrap;
+}
+
+.redflow-cutoff-hint {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--rf-muted);
+}
+
+.redflow-cutoff-control {
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.redflow-cutoff-date {
+  display: block;
+  width: 8.6rem;
+  max-width: 100%;
+  height: 32px;
+  margin: 0;
+  padding: 0 8px;
+  border: 1px solid #fda4af;
+  border-radius: 9px;
+  background: #fff;
+  color: var(--rf-ink);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.redflow-cutoff-date:hover:not(:disabled) {
+  border-color: #fb7185;
+}
+
+.redflow-cutoff-date:focus {
+  border-color: #e11d48;
+  box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.14);
+}
+
+.redflow-cutoff-date:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: #fafaf9;
+}
+
+.redflow-cutoff-badge {
+  position: absolute;
+  top: -7px;
+  right: 10px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #fecdd3;
+  color: #be123c;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.redflow-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.redflow-textarea {
+  resize: vertical;
+  min-height: 96px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .redflow-tabs {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
@@ -566,6 +688,10 @@
 .redflow-card.is-synced {
   opacity: 0.55;
   background: #fafaf9;
+}
+
+.redflow-card.is-before-cutoff {
+  opacity: 0.62;
 }
 
 .redflow-card-title {
