@@ -183,63 +183,33 @@
 }
 
 .redflow-cutoff-bar {
-  position: relative;
-  margin: 0 12px 10px;
-  padding: 10px 12px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid #fecdd3;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #fff1f2 0%, #fff7ed 100%);
-  box-shadow: 0 1px 2px rgba(225, 29, 72, 0.05);
+  padding: 0 14px 10px;
 }
 
-.redflow-cutoff-row {
-  flex: 1;
-  min-width: 0;
-  display: flex;
+.redflow-cutoff-label {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.redflow-cutoff-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  gap: 8px;
+  margin: 0;
+  max-width: 100%;
 }
 
 .redflow-cutoff-title {
+  flex-shrink: 0;
   font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  font-weight: 650;
   color: var(--rf-ink);
   white-space: nowrap;
 }
 
-.redflow-cutoff-hint {
-  margin: 0;
-  font-size: 10.5px;
-  line-height: 1.35;
-  color: var(--rf-muted);
-}
-
-.redflow-cutoff-control {
-  flex-shrink: 0;
-  margin: 0;
-}
-
 .redflow-cutoff-date {
-  display: block;
-  width: 8.6rem;
-  max-width: 100%;
-  height: 32px;
+  flex: 0 0 auto;
+  width: 8.75rem;
+  height: 30px;
   margin: 0;
   padding: 0 8px;
-  border: 1px solid #fda4af;
-  border-radius: 9px;
+  border: 1px solid var(--rf-line);
+  border-radius: 8px;
   background: #fff;
   color: var(--rf-ink);
   font: inherit;
@@ -247,52 +217,21 @@
   font-variant-numeric: tabular-nums;
   outline: none;
   cursor: pointer;
-  transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
 }
 
 .redflow-cutoff-date:hover:not(:disabled) {
-  border-color: #fb7185;
+  border-color: #fda4af;
 }
 
 .redflow-cutoff-date:focus {
   border-color: #e11d48;
-  box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.14);
+  box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.12);
 }
 
 .redflow-cutoff-date:disabled {
   opacity: 0.55;
   cursor: not-allowed;
   background: #fafaf9;
-}
-
-.redflow-cutoff-badge {
-  position: absolute;
-  top: -7px;
-  right: 10px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: #fff;
-  border: 1px solid #fecdd3;
-  color: #be123c;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  line-height: 1.4;
-  text-transform: uppercase;
-}
-
-.redflow-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 .redflow-textarea {

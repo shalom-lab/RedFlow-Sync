@@ -935,27 +935,17 @@ export function PanelApp() {
           </div>
 
           <div className="redflow-cutoff-bar">
-            <div className="redflow-cutoff-row">
-              <div className="redflow-cutoff-copy">
-                <span className="redflow-cutoff-title">导入起点</span>
-                <span className="redflow-cutoff-hint">
-                  仅此日期之后可导入 · 发布后自动更新
-                </span>
-              </div>
-              <label className="redflow-cutoff-control">
-                <span className="redflow-sr-only">导入起点日期</span>
-                <input
-                  type="date"
-                  className="redflow-cutoff-date"
-                  value={importAfterToDateInput(importAfter)}
-                  onChange={(e) => void onImportAfterDateChange(e)}
-                  disabled={showSyncChrome || autoRunning}
-                />
-              </label>
-            </div>
-            <span className="redflow-cutoff-badge" title="保存在 Chrome 同步存储">
-              Sync
-            </span>
+            <label className="redflow-cutoff-label">
+              <span className="redflow-cutoff-title">导入起点</span>
+              <input
+                type="date"
+                className="redflow-cutoff-date"
+                value={importAfterToDateInput(importAfter)}
+                onChange={(e) => void onImportAfterDateChange(e)}
+                disabled={showSyncChrome || autoRunning}
+                title="仅此日期之后可导入；发布成功自动更新（Chrome 同步）"
+              />
+            </label>
           </div>
 
           {(autoRunning || autoPaused) && (
