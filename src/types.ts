@@ -43,6 +43,11 @@ export interface ExtensionConfig {
   /** 侧栏打开且发布页在时，每天自动处理 5 篇 */
   dailyAutoPublish: boolean;
   /**
+   * 把发布页拆成独立小窗，贴在屏幕右侧。
+   * 自动化仍在前台可见窗口里跑，但不占满整屏。
+   */
+  compactPublishWindow: boolean;
+  /**
    * 提交方式：
    * - draft：不勾选页面「定时发布」，点白色「暂存离开」存草稿
    * - schedule：勾选并填写定时后，点红色「定时发布」
@@ -108,6 +113,7 @@ export const DEFAULT_CONFIG: ExtensionConfig = {
   imagesPath: DEFAULT_IMAGES_PATH,
   categories: "",
   dailyAutoPublish: false,
+  compactPublishWindow: false,
   submitMode: "draft",
   scheduleStartHour: 10,
   scheduleEndHour: 20,

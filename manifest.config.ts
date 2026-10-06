@@ -31,7 +31,7 @@ export default defineManifest({
     service_worker: "src/background/index.ts",
     type: "module",
   },
-  permissions: ["storage", "alarms", "sidePanel", "tabs", "scripting"],
+  permissions: ["storage", "alarms", "sidePanel", "tabs", "scripting", "windows"],
   host_permissions: ["https://creator.xiaohongshu.com/*"],
   optional_host_permissions: [
     "https://api.github.com/*",

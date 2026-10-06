@@ -6,6 +6,11 @@ import type {
   UploadImagesRequest,
 } from "@/contents/publish-bridge";
 import { pace, sleep, waitPace } from "./pace";
+import {
+  dockPublishTabInCompactWindow,
+  openCompactPublishWindow,
+} from "./publish-window";
+import { getConfig } from "./storage";
 
 export const XHS_PUBLISH_URL =
   "https://creator.xiaohongshu.com/publish/publish?target=image";
@@ -28,7 +33,9 @@ function isPortClosedError(err: unknown): boolean {
   );
 }
 
-async function findCreatorTabId(): Promise<number | null> {
+async function findCreatorTabId(opts?: {
+  compact?: boolean;
+}): Promise<number | null> {
   const creatorTabs = await chrome.tabs.query({
     url: ["*://creator.xiaohongshu.com/*"],
   });
@@ -36,6 +43,11 @@ async function findCreatorTabId(): Promise<number | null> {
     (t.url || "").includes("/publish"),
   );
   if (publish?.id != null) return publish.id;
+
+  if (opts?.compact) {
+    const creator = creatorTabs.find((t) => t.id != null);
+    return creator?.id ?? null;
+  }
 
   const [active] = await chrome.tabs.query({
     active: true,
@@ -91,22 +103,38 @@ export async function waitForPublishPhase(
 export async function ensurePublishTabReady(): Promise<
   { ok: true; tabId: number } | { ok: false; error: string }
 > {
-  let tabId = await findCreatorTabId();
+  const compact = (await getConfig()).compactPublishWindow === true;
+  let tabId = await findCreatorTabId({ compact });
   if (tabId == null) {
-    const created = await chrome.tabs.create({
-      url: XHS_PUBLISH_URL,
-      active: true,
-    });
-    if (created.id == null) {
-      return { ok: false, error: "无法打开小红书发布页" };
+    if (compact) {
+      const opened = await openCompactPublishWindow();
+      if (!opened.ok) return opened;
+      tabId = opened.tabId;
+    } else {
+      const created = await chrome.tabs.create({
+        url: XHS_PUBLISH_URL,
+        active: true,
+      });
+      if (created.id == null) {
+        return { ok: false, error: "无法打开小红书发布页" };
+      }
+      tabId = created.id;
     }
-    tabId = created.id;
   } else {
     const tab = await chrome.tabs.get(tabId);
     const url = tab.url || "";
-    await chrome.tabs.update(tabId, { active: true });
+    if (!tab.active) {
+      await chrome.tabs.update(tabId, { active: true });
+    }
     if (!isOnPublishArea(url)) {
       await chrome.tabs.update(tabId, { url: XHS_PUBLISH_URL, active: true });
+    }
+    if (compact) {
+      try {
+        await dockPublishTabInCompactWindow(tabId);
+      } catch (e) {
+        console.warn("[RedFlow] compact publish window", e);
+      }
     }
   }
 
@@ -119,6 +147,27 @@ export async function ensurePublishTabReady(): Promise<
     ok: false,
     error: "发布页脚本未就绪。请保持发布页在前台（不必手动刷新）后再试",
   };
+}
+
+/** 勾选「独立小窗」时立刻把已有发布页拆到右侧；没有则新开一扇。 */
+export async function applyCompactPublishWindowNow(): Promise<
+  { ok: true } | { ok: false; error: string }
+> {
+  try {
+    const tabId = await findCreatorTabId({ compact: true });
+    if (tabId != null) {
+      await dockPublishTabInCompactWindow(tabId, { force: true });
+      return { ok: true };
+    }
+    const opened = await openCompactPublishWindow();
+    if (!opened.ok) return opened;
+    return { ok: true };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
 }
 
 type PublishCallResult = FillPublishPageResponse & { portClosed?: boolean };

@@ -36,6 +36,7 @@ export function normalizeConfig(
   if (!merged.repo?.trim()) merged.repo = DEFAULT_CONFIG.repo;
   if (!merged.branch?.trim()) merged.branch = DEFAULT_CONFIG.branch;
   merged.dailyAutoPublish = Boolean(merged.dailyAutoPublish);
+  merged.compactPublishWindow = Boolean(merged.compactPublishWindow);
   merged.declareAiContent = merged.declareAiContent !== false;
   merged.groupChatEnabled = merged.groupChatEnabled === true;
   merged.quoteNoteEnabled = merged.quoteNoteEnabled === true;

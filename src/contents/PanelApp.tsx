@@ -46,7 +46,10 @@ import {
   setImportAfter,
 } from "@/lib/storage";
 import { hasGitHubAccess, requestGitHubAccess } from "@/lib/permissions";
-import { hasPublishTabOpen } from "@/lib/page-bridge";
+import {
+  applyCompactPublishWindowNow,
+  hasPublishTabOpen,
+} from "@/lib/page-bridge";
 import { base64ToBlob } from "@/lib/base64";
 import {
   DEFAULT_PACE_MS,
@@ -697,6 +700,7 @@ export function PanelApp() {
           DEFAULT_IMAGES_PATH,
         categories: settingsForm.categories.trim(),
         dailyAutoPublish: Boolean(settingsForm.dailyAutoPublish),
+        compactPublishWindow: Boolean(settingsForm.compactPublishWindow),
         submitMode:
           settingsForm.submitMode === "schedule" ? "schedule" : "draft",
         scheduleStartHour: settingsForm.scheduleStartHour,
@@ -1471,6 +1475,32 @@ export function PanelApp() {
             </label>
             <p className="redflow-settings-hint">
               与「开始自动化」、手动导入同一套逻辑；侧栏与发布页需保持打开。
+            </p>
+
+            <label className="redflow-toggle redflow-toggle-block">
+              <input
+                type="checkbox"
+                checked={Boolean(settingsForm.compactPublishWindow)}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  persistSettingsPatch({ compactPublishWindow: on });
+                  if (on) {
+                    void applyCompactPublishWindowNow().then((res) => {
+                      setSettingsMsg(
+                        res.ok
+                          ? "已把发布页收到右侧小窗（约 800×620），不挡主屏幕"
+                          : `小窗未能打开：${res.error}`,
+                      );
+                    });
+                  } else {
+                    setSettingsMsg("已关闭独立小窗；下次仍在当前浏览器窗口打开发布页");
+                  }
+                }}
+              />
+              <span>发布页独立小窗（右侧收窄）</span>
+            </label>
+            <p className="redflow-settings-hint">
+              勾选后把小红书创作页拆成单独窗口，贴在屏幕右边，比参考截图再略小。窗口不要最小化，自动化才能点到页面。
             </p>
           </section>
 
