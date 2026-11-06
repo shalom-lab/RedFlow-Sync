@@ -1,4 +1,12 @@
-import { getConfig, bumpImportAfter } from "@/lib/storage";
+import {
+  getConfig,
+  bumpImportAfter,
+  hasMigratedLegacyIdbCategory,
+  markLegacyIdbCategoryMigrated,
+} from "@/lib/storage";
+import { getActiveSource, sourceCategory, sourceIdFromCategory } from "@/lib/sources";
+import { idbMigrateCategory } from "@/lib/idb";
+import { LEGACY_SOURCE_ID } from "@/types";
 import { hasGitHubAccess } from "@/lib/permissions";
 import {
   getImageArrayBuffer,
@@ -59,10 +67,25 @@ async function ensureAlarm(): Promise<void> {
   });
 }
 
+async function ensureLegacyCategoryMigrated(): Promise<void> {
+  if (await hasMigratedLegacyIdbCategory()) return;
+  try {
+    await idbMigrateCategory(
+      "wechat_drafts",
+      sourceCategory(LEGACY_SOURCE_ID),
+    );
+  } catch (e) {
+    console.warn("[RedFlow] legacy idb migrate", e);
+  }
+  await markLegacyIdbCategoryMigrated();
+}
+
 async function safeSync(reason: string): Promise<RedFlowResponse> {
   try {
+    await ensureLegacyCategoryMigrated();
     const config = await getConfig();
-    if (!config.owner || !config.repo) {
+    const source = getActiveSource(config);
+    if (!source?.owner || !source?.repo) {
       return { ok: false, error: "尚未配置 GitHub 仓库" };
     }
     if (!(await hasGitHubAccess())) {
@@ -98,8 +121,10 @@ chrome.runtime.onInstalled.addListener((details) => {
     .catch((err) => console.warn("[RedFlow] sidePanel behavior", err));
   if (details.reason === "install" || details.reason === "update") {
     void (async () => {
+      await ensureLegacyCategoryMigrated();
       const config = await getConfig();
-      if (config.owner && config.repo) {
+      const source = getActiveSource(config);
+      if (source?.owner && source?.repo) {
         await safeSync(details.reason);
       }
     })();
@@ -114,8 +139,10 @@ void chrome.sidePanel
 chrome.runtime.onStartup.addListener(() => {
   void ensureAlarm();
   void (async () => {
+    await ensureLegacyCategoryMigrated();
     const config = await getConfig();
-    if (config.owner && config.repo) {
+    const source = getActiveSource(config);
+    if (source?.owner && source?.repo) {
       try {
         await syncIfStale(config);
       } catch (e) {
@@ -163,7 +190,8 @@ chrome.runtime.onMessage.addListener(
           }
 
           let files = message.files;
-          if (message.category && message.fileId) {
+          // 仅在未附带 files 时才回退 IDB（例如旧路径）；有 files 时优先用调用方已拼好的首图
+          if ((!files || !files.length) && message.category && message.fileId) {
             const raw = await getImagesArrayBuffers(
               message.category,
               message.fileId,
@@ -551,7 +579,10 @@ chrome.runtime.onMessage.addListener(
             } satisfies RedFlowResponse);
             return;
           }
-          await bumpImportAfter(message.fileId);
+          await bumpImportAfter(
+            message.fileId,
+            sourceIdFromCategory(message.category) ?? undefined,
+          );
           // 配图留在 IndexedDB，历史页可点开查看
           reply({
             ok: true,

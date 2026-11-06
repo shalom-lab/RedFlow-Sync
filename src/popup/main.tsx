@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { getConfig } from "@/lib/storage";
+import { getActiveSource } from "@/lib/sources";
+import { formatRepoSlug } from "@/types";
 import "./popup.css";
 
 function PopupApp() {
@@ -9,8 +11,11 @@ function PopupApp() {
 
   useEffect(() => {
     void getConfig().then((c) => {
-      if (c.owner && c.repo) {
-        setSummary(`${c.owner}/${c.repo} @ ${c.branch || "main"}`);
+      const src = getActiveSource(c);
+      if (src?.owner && src?.repo) {
+        setSummary(
+          `${src.name || formatRepoSlug(src.owner, src.repo)} · 默认分支`,
+        );
         setReady(true);
       }
     });

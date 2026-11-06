@@ -813,12 +813,36 @@ async function expandContentSettings(): Promise<void> {
   }
 }
 
+function isScheduleLabelText(t: string): boolean {
+  const s = normalizeLabel(t);
+  if (!s) return false;
+  if (s === "定时发布" || s === "定时发表") return true;
+  return s.includes("定时") && (s.includes("发布") || s.includes("发表")) && s.length < 20;
+}
+
+function isScheduleSubmitText(t: string): boolean {
+  const s = normalizeLabel(t);
+  if (!s) return false;
+  if (s === "定时发布" || s === "定时发表") return true;
+  // 红按钮偶发带时间：定时发布 10:00
+  return s.startsWith("定时") && (s.includes("发布") || s.includes("发表"));
+}
+
+function isInsidePublishFooter(el: HTMLElement): boolean {
+  return Boolean(
+    el.closest("xhs-publish-btn") ||
+      el.closest(".publish-page-publish-btn") ||
+      el.closest("[class*='publish-btn']"),
+  );
+}
+
 async function expandMoreSettings(): Promise<void> {
+  if (findScheduleToggle()) return;
   const schedule = findVisibleByText(
-    [(t) => t === "定时发布", (t) => t.includes("定时发布") && t.length < 16],
+    [(t) => isScheduleLabelText(t)],
     6,
   );
-  if (schedule) return;
+  if (schedule && !isInsidePublishFooter(schedule)) return;
 
   const headers = Array.from(
     document.querySelectorAll<HTMLElement>(
@@ -992,22 +1016,40 @@ export async function setDeclareAiContent(enabled: boolean): Promise<boolean> {
 }
 
 function findScheduleToggle(): HTMLElement | null {
-  return (
-    findVisibleByText(
-      [
-        (t) => t === "定时发布",
-        (t) => t.includes("定时发布") && t.length < 16,
-      ],
-      6,
-    ) ||
+  // 2026 创作者中心：优先 .post-time-wrapper；勿把底部红按钮文案当成开关
+  const wrap =
+    document.querySelector<HTMLElement>(".post-time-wrapper") ||
     document.querySelector<HTMLElement>(
-      ".schedule-checkbox, .el-switch, [class*='schedule']",
-    )
+      "[class*='post-time'], [class*='schedule-publish'], [class*='Schedule']",
+    );
+  if (wrap) {
+    const sw = wrap.querySelector<HTMLElement>(
+      ".d-switch, .el-switch, [role='switch'], input[type='checkbox']",
+    );
+    if (sw) return sw;
+  }
+
+  const labeled = findVisibleByText([(t) => isScheduleLabelText(t)], 6);
+  if (labeled && !isInsidePublishFooter(labeled)) return labeled;
+
+  const candidates = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      ".schedule-checkbox, .el-switch, .d-switch, [class*='schedule']",
+    ),
   );
+  return candidates.find((el) => !isInsidePublishFooter(el)) ?? null;
 }
 
 function scheduleSwitchEl(toggle: HTMLElement): HTMLElement {
-  const row = toggle.closest<HTMLElement>("div") || toggle;
+  if (
+    toggle.matches(".d-switch, .el-switch, [role='switch'], input[type='checkbox']")
+  ) {
+    return toggle;
+  }
+  const row =
+    toggle.closest<HTMLElement>(".post-time-wrapper") ||
+    toggle.closest<HTMLElement>("div") ||
+    toggle;
   return (
     row.querySelector<HTMLElement>(
       ".d-switch, .el-switch, [role='switch'], input[type='checkbox']",
@@ -1059,7 +1101,7 @@ export async function setScheduledPublish(when: Date): Promise<Date | null> {
 
   const editor =
     document.querySelector<HTMLElement>(
-      ".el-date-editor, [class*='date-editor'], [class*='date-picker']",
+      ".date-picker-container, .el-date-editor, [class*='date-editor'], [class*='date-picker']",
     ) ||
     Array.from(document.querySelectorAll<HTMLElement>("*")).find((el) => {
       if (el.children.length > 6) return false;
@@ -1073,7 +1115,7 @@ export async function setScheduledPublish(when: Date): Promise<Date | null> {
 
   const input =
     document.querySelector<HTMLInputElement>(
-      ".el-date-editor input, .el-date-editor .el-input__inner, [class*='date-editor'] input, [class*='date-picker'] input",
+      ".date-picker-container input, .el-date-editor input, .el-date-editor .el-input__inner, [class*='date-editor'] input, [class*='date-picker'] input",
     ) ||
     Array.from(document.querySelectorAll<HTMLInputElement>("input")).find(
       (el) =>
@@ -1118,6 +1160,14 @@ export async function setScheduledPublish(when: Date): Promise<Date | null> {
   }
 
   await waitPace("step");
+  // 等底部宿主 submit-text 变成「定时*」，避免随后点到仍是「发布」的红按钮
+  await waitUntil(() => {
+    const host = findPublishBtnHost();
+    if (!host) return null;
+    const submit = host.getAttribute("submit-text") || "";
+    return isScheduleSubmitText(submit) ? host : null;
+  }, 8000);
+
   const appliedText = input?.value?.trim() || text;
   return parseXhsSchedule(appliedText) ?? when;
 }
@@ -1318,7 +1368,8 @@ export async function injectImageBlob(
           type: "INJECT_IMAGE_FILES",
           category,
           fileId,
-          files: category ? undefined : files,
+          // 必须带上已拼好的 blobs（含首图拼贴）；勿因有 category 改回 IDB 原图
+          files,
         },
         (response) => {
           void chrome.runtime.lastError;
@@ -1383,14 +1434,20 @@ function pickFooterButton(
   if (kind === "schedule") {
     return (
       buttons.find((b) => {
-        const t = (b.textContent || "").replace(/\s+/g, "").trim();
-        return b.classList.contains("bg-red") && t === "定时发布";
-      }) ?? null
+        const t = normalizeLabel(b.textContent || "");
+        const red =
+          b.classList.contains("bg-red") ||
+          String(b.className || "").includes("red") ||
+          String(b.className || "").includes("primary");
+        return red && isScheduleSubmitText(t);
+      }) ??
+      buttons.find((b) => isScheduleSubmitText(b.textContent || "")) ??
+      null
     );
   }
   return (
     buttons.find((b) => {
-      const t = (b.textContent || "").replace(/\s+/g, "").trim();
+      const t = normalizeLabel(b.textContent || "");
       return t === "暂存离开" && !b.classList.contains("bg-red");
     }) ?? null
   );
@@ -1405,16 +1462,16 @@ export async function clickPublishFooter(
     if (kind === "schedule") {
       if (el.getAttribute("submit-disabled") === "true") return null;
       const submit = el.getAttribute("submit-text") || "";
-      if (!submit.includes("定时")) return null;
+      if (!isScheduleSubmitText(submit) && !submit.includes("定时")) return null;
     } else if (el.getAttribute("save-disabled") === "true") {
       return null;
     }
     return el;
-  }, 12000);
+  }, 16000);
   if (!host) {
     console.warn(
       kind === "schedule"
-        ? "[RedFlow] 未找到可点的红色「定时发布」"
+        ? "[RedFlow] 未找到可点的红色「定时发布/定时发表」（submit-text 未含定时）"
         : "[RedFlow] 未找到 xhs-publish-btn 宿主",
     );
     return false;

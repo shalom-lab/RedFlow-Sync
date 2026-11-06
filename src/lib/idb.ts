@@ -385,6 +385,41 @@ export async function idbClearCategory(category: string): Promise<number> {
   return rows.length;
 }
 
+/** 把旧 category 下的 items/images/thumbs 迁到新 category（改 key） */
+export async function idbMigrateCategory(
+  fromCategory: string,
+  toCategory: string,
+): Promise<number> {
+  if (!fromCategory || !toCategory || fromCategory === toCategory) return 0;
+  const rows = await idbListByCategory(fromCategory);
+  if (!rows.length) return 0;
+
+  let n = 0;
+  for (const row of rows) {
+    const imgs = await idbListImages(fromCategory, row.fileId);
+    await idbPutItem({
+      ...row,
+      key: itemKey(toCategory, row.fileId),
+      category: toCategory,
+    });
+    if (imgs.length) {
+      await idbReplaceImages(
+        toCategory,
+        row.fileId,
+        imgs.map((img) => ({
+          blob: img.blob,
+          mime: img.mime,
+          sha: img.sha,
+        })),
+      );
+    }
+    await idbClearMediaForDraft(fromCategory, row.fileId);
+    await idbDeleteItem(row.key);
+    n += 1;
+  }
+  return n;
+}
+
 /** 只清空条目索引，保留 images/thumbs（配图下载成本高，留给历史页） */
 export async function idbClearItemsStore(): Promise<void> {
   const db = await openDb();

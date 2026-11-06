@@ -1,6 +1,10 @@
 import {
   DEFAULT_BODY_TEMPLATE,
   DEFAULT_CONFIG,
+  DEFAULT_DRAFTS_FILE,
+  DEFAULT_IMAGES_PATH,
+  LEGACY_SOURCE_ID,
+  type DataSource,
   type ExtensionConfig,
   type UploadHistory,
 } from "@/types";
@@ -8,34 +12,96 @@ import { compareFileIdTime } from "./draft-time";
 import { itemKey } from "./keys";
 import { normalizePace } from "./pace";
 import { normalizeSchedulePlan } from "./schedule";
+import {
+  createDataSource,
+  getActiveSource,
+  normalizeDataSource,
+  sourceCategory,
+} from "./sources";
 
 const CONFIG_KEY = "redflow_config";
 const HISTORY_KEY = "redflow_upload_history";
 const DAILY_AUTO_DATE_KEY = "redflow_daily_auto_date";
-/** 导入起点门槛（跨设备 sync，仅存这一条字符串） */
+/** 旧版全局导入起点 */
 const IMPORT_AFTER_KEY = "redflow_import_after";
+/** 按数据源的导入起点 map */
+const IMPORT_AFTER_MAP_KEY = "redflow_import_after_by_source";
+const LEGACY_IDB_MIGRATED_KEY = "redflow_legacy_idb_category_migrated";
+
+function migrateSourcesFromLegacy(
+  raw: Record<string, unknown>,
+): { sources: DataSource[]; activeSourceId: string } {
+  const owner =
+    typeof raw.owner === "string" && raw.owner.trim()
+      ? raw.owner.trim()
+      : DEFAULT_CONFIG.sources[0]!.owner;
+  const repo =
+    typeof raw.repo === "string" && raw.repo.trim()
+      ? raw.repo.trim()
+      : DEFAULT_CONFIG.sources[0]!.repo;
+  const src = createDataSource({
+    id: LEGACY_SOURCE_ID,
+    name: `${owner}/${repo}`,
+    githubToken: typeof raw.githubToken === "string" ? raw.githubToken : "",
+    owner,
+    repo,
+    basePath:
+      typeof raw.basePath === "string" && raw.basePath.trim()
+        ? raw.basePath
+        : DEFAULT_DRAFTS_FILE,
+    imagesPath:
+      typeof raw.imagesPath === "string" && raw.imagesPath.trim()
+        ? raw.imagesPath
+        : DEFAULT_IMAGES_PATH,
+  });
+  return { sources: [src], activeSourceId: src.id };
+}
 
 export function normalizeConfig(
   raw?: Partial<ExtensionConfig> | null,
 ): ExtensionConfig {
+  const bag = (raw ?? {}) as Record<string, unknown>;
+  let sources: DataSource[] = [];
+  if (Array.isArray(bag.sources)) {
+    for (const row of bag.sources) {
+      const s = normalizeDataSource(row);
+      if (s) sources.push(s);
+    }
+  }
+  let activeSourceId =
+    typeof bag.activeSourceId === "string" ? bag.activeSourceId.trim() : "";
+
+  if (!sources.length) {
+    const migrated = migrateSourcesFromLegacy(bag);
+    sources = migrated.sources;
+    activeSourceId = migrated.activeSourceId;
+  }
+
+  // 去重 id
+  const seen = new Set<string>();
+  sources = sources.filter((s) => {
+    if (seen.has(s.id)) return false;
+    seen.add(s.id);
+    return true;
+  });
+
+  if (!activeSourceId || !sources.some((s) => s.id === activeSourceId)) {
+    activeSourceId = sources[0]!.id;
+  }
+
   const merged: ExtensionConfig = {
     ...DEFAULT_CONFIG,
     ...raw,
+    sources,
+    activeSourceId,
   };
-  if (!merged.basePath?.trim()) {
-    merged.basePath = DEFAULT_CONFIG.basePath;
-  }
-  if (
-    !merged.imagesPath?.trim() ||
-    merged.imagesPath.trim() === "Images" ||
-    merged.imagesPath.trim() === "Images/Prompt"
-  ) {
-    merged.imagesPath = DEFAULT_CONFIG.imagesPath;
-  }
-  if (!merged.owner?.trim()) merged.owner = DEFAULT_CONFIG.owner;
-  if (!merged.repo?.trim()) merged.repo = DEFAULT_CONFIG.repo;
-  if (!merged.branch?.trim()) merged.branch = DEFAULT_CONFIG.branch;
+
   merged.dailyAutoPublish = Boolean(merged.dailyAutoPublish);
+  {
+    const n = Math.floor(Number(merged.dailyAutoCount));
+    merged.dailyAutoCount =
+      Number.isFinite(n) && n >= 1 ? Math.min(50, n) : DEFAULT_CONFIG.dailyAutoCount;
+  }
   merged.compactPublishWindow = Boolean(merged.compactPublishWindow);
   merged.declareAiContent = merged.declareAiContent !== false;
   merged.groupChatEnabled = merged.groupChatEnabled === true;
@@ -90,7 +156,6 @@ export async function markUploaded(
     uploaded: true,
     uploadedAt: new Date().toISOString(),
   };
-  // 兼容旧版仅 fileId 的 key，顺带清理避免重复
   if (history[fileId]) delete history[fileId];
   await chrome.storage.local.set({ [HISTORY_KEY]: history });
 }
@@ -104,7 +169,6 @@ export function isUploaded(
   if (keyed?.uploaded) {
     return { uploaded: true, uploadedAt: keyed.uploadedAt };
   }
-  // 兼容旧数据
   const legacy = history[fileId];
   if (legacy?.uploaded) {
     return { uploaded: true, uploadedAt: legacy.uploadedAt };
@@ -134,28 +198,64 @@ export async function clearDailyAutoDate(): Promise<void> {
   await chrome.storage.local.remove(DAILY_AUTO_DATE_KEY);
 }
 
-export async function getImportAfter(): Promise<string> {
-  const result = await chrome.storage.sync.get(IMPORT_AFTER_KEY);
-  return String(result[IMPORT_AFTER_KEY] ?? "").trim();
+async function readImportAfterMap(): Promise<Record<string, string>> {
+  const result = await chrome.storage.sync.get([
+    IMPORT_AFTER_MAP_KEY,
+    IMPORT_AFTER_KEY,
+  ]);
+  const map =
+    (result[IMPORT_AFTER_MAP_KEY] as Record<string, string> | undefined) ?? {};
+  const legacy = String(result[IMPORT_AFTER_KEY] ?? "").trim();
+  if (legacy && !map[LEGACY_SOURCE_ID]) {
+    return { ...map, [LEGACY_SOURCE_ID]: legacy };
+  }
+  return map;
 }
 
-export async function setImportAfter(value: string): Promise<void> {
+export async function getImportAfter(sourceId?: string): Promise<string> {
+  const cfg = await getConfig();
+  const sid = (sourceId || cfg.activeSourceId || LEGACY_SOURCE_ID).trim();
+  const map = await readImportAfterMap();
+  return String(map[sid] ?? "").trim();
+}
+
+export async function setImportAfter(
+  value: string,
+  sourceId?: string,
+): Promise<void> {
+  const cfg = await getConfig();
+  const sid = (sourceId || cfg.activeSourceId || LEGACY_SOURCE_ID).trim();
+  const map = await readImportAfterMap();
   const v = value.trim();
-  if (!v) {
-    await chrome.storage.sync.remove(IMPORT_AFTER_KEY);
-    return;
-  }
-  await chrome.storage.sync.set({ [IMPORT_AFTER_KEY]: v });
+  if (!v) delete map[sid];
+  else map[sid] = v;
+  await chrome.storage.sync.set({ [IMPORT_AFTER_MAP_KEY]: map });
+  // 清理旧全局键，避免双源
+  await chrome.storage.sync.remove(IMPORT_AFTER_KEY);
 }
 
 /** 仅当 fileId 新于当前门槛时推进；返回是否写入 */
-export async function bumpImportAfter(fileId: string): Promise<boolean> {
+export async function bumpImportAfter(
+  fileId: string,
+  sourceId?: string,
+): Promise<boolean> {
   const id = fileId.trim();
   if (!id) return false;
-  const cur = await getImportAfter();
+  const cfg = await getConfig();
+  const sid = (sourceId || cfg.activeSourceId || LEGACY_SOURCE_ID).trim();
+  const cur = await getImportAfter(sid);
   if (cur && compareFileIdTime(id, cur) <= 0) return false;
-  await setImportAfter(id);
+  await setImportAfter(id, sid);
   return true;
+}
+
+export async function hasMigratedLegacyIdbCategory(): Promise<boolean> {
+  const flag = await chrome.storage.local.get(LEGACY_IDB_MIGRATED_KEY);
+  return Boolean(flag[LEGACY_IDB_MIGRATED_KEY]);
+}
+
+export async function markLegacyIdbCategoryMigrated(): Promise<void> {
+  await chrome.storage.local.set({ [LEGACY_IDB_MIGRATED_KEY]: true });
 }
 
 export function parseCategories(raw: string): string[] {
@@ -164,3 +264,5 @@ export function parseCategories(raw: string): string[] {
     .map((s) => s.trim())
     .filter(Boolean);
 }
+
+export { getActiveSource, sourceCategory };

@@ -9,8 +9,14 @@ import {
   DEFAULT_REQUIRED_TOPICS,
   formatRepoSlug,
   parseRepoSlug,
+  type DataSource,
   type ExtensionConfig,
 } from "@/types";
+import {
+  createDataSource,
+  getActiveSource,
+  newSourceId,
+} from "@/lib/sources";
 import {
   AUTO_BATCH_SIZE,
   autoUploadQueue,
@@ -67,7 +73,19 @@ interface PanelItem extends CachedItemDTO {
 }
 
 function isConfigReady(cfg: ExtensionConfig): boolean {
-  return Boolean(cfg.owner.trim() && cfg.repo.trim());
+  const src = getActiveSource(cfg);
+  return Boolean(src?.owner?.trim() && src?.repo?.trim());
+}
+
+function patchActiveSource(
+  form: ExtensionConfig,
+  patch: Partial<DataSource>,
+): ExtensionConfig {
+  const activeId = form.activeSourceId;
+  const sources = form.sources.map((s) =>
+    s.id === activeId ? { ...s, ...patch } : s,
+  );
+  return normalizeConfig({ ...form, sources });
 }
 
 function sortPanelItems(
@@ -178,6 +196,8 @@ export function PanelApp() {
   const [dangerConfirm, setDangerConfirm] = useState<null | "flags" | "drafts">(
     null,
   );
+  const [sourceDeleteConfirm, setSourceDeleteConfirm] =
+    useState<DataSource | null>(null);
   const [importAfter, setImportAfterState] = useState("");
   const emptyPollRef = useRef(0);
   const toastTimerRef = useRef<number | null>(null);
@@ -223,19 +243,24 @@ export function PanelApp() {
       changes: { [key: string]: chrome.storage.StorageChange },
       area: string,
     ) => {
-      if (area !== "sync" || !changes.redflow_import_after) return;
-      const next = String(changes.redflow_import_after.newValue ?? "").trim();
+      if (area !== "sync" || !changes.redflow_import_after_by_source) return;
+      const map =
+        (changes.redflow_import_after_by_source.newValue as
+          | Record<string, string>
+          | undefined) ?? {};
+      const sid = config.activeSourceId;
+      const next = String(map[sid] ?? "").trim();
       setImportAfterState(next);
       setItems((prev) => sortPanelItems(prev, next));
     };
     chrome.storage.onChanged.addListener(onStorage);
     return () => chrome.storage.onChanged.removeListener(onStorage);
-  }, []);
+  }, [config.activeSourceId]);
 
   const onImportAfterDateChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value;
     const next = raw ? dateInputToImportAfter(raw) : "";
-    await setImportAfter(next);
+    await setImportAfter(next, config.activeSourceId);
     setImportAfterState(next);
     setItems((prev) => sortPanelItems(prev, next));
   };
@@ -363,11 +388,16 @@ export function PanelApp() {
     async (cfg: ExtensionConfig, preferCat?: string) => {
       setConfig(cfg);
       setSettingsForm(cfg);
-      setSettingsRepoSlug(formatRepoSlug(cfg.owner, cfg.repo));
+      const src = getActiveSource(cfg);
+      setSettingsRepoSlug(
+        src ? formatRepoSlug(src.owner, src.repo) : "",
+      );
       const cats = getCategoryList(cfg);
       const nextCat =
         preferCat && cats.includes(preferCat) ? preferCat : (cats[0] ?? "");
       setCategory(nextCat);
+      const after = await getImportAfter(cfg.activeSourceId);
+      setImportAfterState(after);
       if (!isConfigReady(cfg)) {
         setTab("settings");
         setItems([]);
@@ -384,6 +414,21 @@ export function PanelApp() {
     setGithubOk(granted);
     await applyConfig(cfg);
   }, [applyConfig]);
+
+  const switchActiveSource = async (sourceId: string) => {
+    if (sourceId === config.activeSourceId) return;
+    if (autoRunningRef.current || busyRef.current) {
+      showToast("自动化进行中，请稍后再切换数据源");
+      return;
+    }
+    const next = normalizeConfig({ ...config, activeSourceId: sourceId });
+    skipConfigReloadRef.current = true;
+    await saveConfig(next);
+    await applyConfig(next);
+    showToast(
+      `已切换到 ${getActiveSource(next)?.name || sourceId}`,
+    );
+  };
 
   useEffect(() => {
     void bootstrap();
@@ -520,19 +565,23 @@ export function PanelApp() {
     }
     setAutoRunning(true);
     setAutoPaused(false);
+    const batchSize =
+      mode === "daily"
+        ? Math.max(1, queue.length)
+        : AUTO_BATCH_SIZE;
     setAutoProgress({
       current: 0,
       total: queue.length,
       batchNo: 1,
-      batchCount: Math.max(1, queue.length / AUTO_BATCH_SIZE),
+      batchCount: Math.max(1, Math.ceil(queue.length / batchSize)),
       batchIndex: 0,
-      batchSize: AUTO_BATCH_SIZE,
+      batchSize,
       title: mode === "daily" ? "每日自动排队中" : "排队中",
       fileId: "",
     });
     showToast(
       mode === "daily"
-        ? `每日自动：开始今天的 ${AUTO_BATCH_SIZE} 篇`
+        ? `每日自动：开始今天的 ${queue.length} 篇`
         : `开始自动化：${queue.length} 篇（${queue.length / AUTO_BATCH_SIZE} 批 × ${AUTO_BATCH_SIZE}）`,
     );
 
@@ -669,13 +718,6 @@ export function PanelApp() {
     persistSettingsPatch({ pace: normalizePace(pace) });
   };
 
-  const onSettingsChange =
-    (key: keyof ExtensionConfig) =>
-    (e: ChangeEvent<HTMLInputElement>) => {
-      setSettingsForm((prev) => ({ ...prev, [key]: e.target.value }));
-      setSettingsMsg(null);
-    };
-
   const onSaveSettings = async (e: FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -686,20 +728,37 @@ export function PanelApp() {
         setSettingsMsg("仓库请填写为 owner/repo");
         return;
       }
+      const editing = getActiveSource(settingsForm);
+      if (!editing) {
+        setSettingsMsg("请先添加一个数据源");
+        return;
+      }
 
-      const next: ExtensionConfig = {
-        githubToken: settingsForm.githubToken.trim(),
+      const updatedSource: DataSource = {
+        ...editing,
         owner: parsed.owner,
         repo: parsed.repo,
-        branch: settingsForm.branch.trim() || "master",
         basePath:
-          settingsForm.basePath.trim().replace(/^\/+|\/+$/g, "") ||
+          editing.basePath.trim().replace(/^\/+|\/+$/g, "") ||
           DEFAULT_DRAFTS_FILE,
         imagesPath:
-          settingsForm.imagesPath.trim().replace(/^\/+|\/+$/g, "") ||
+          editing.imagesPath.trim().replace(/^\/+|\/+$/g, "") ||
           DEFAULT_IMAGES_PATH,
-        categories: settingsForm.categories.trim(),
+        name:
+          editing.name.trim() ||
+          formatRepoSlug(parsed.owner, parsed.repo) ||
+          "数据源",
+        githubToken: editing.githubToken.trim(),
+      };
+
+      const next: ExtensionConfig = normalizeConfig({
+        ...settingsForm,
+        sources: settingsForm.sources.map((s) =>
+          s.id === updatedSource.id ? updatedSource : s,
+        ),
+        activeSourceId: updatedSource.id,
         dailyAutoPublish: Boolean(settingsForm.dailyAutoPublish),
+        dailyAutoCount: settingsForm.dailyAutoCount,
         compactPublishWindow: Boolean(settingsForm.compactPublishWindow),
         submitMode:
           settingsForm.submitMode === "schedule" ? "schedule" : "draft",
@@ -718,7 +777,7 @@ export function PanelApp() {
           settingsForm.requiredTopics.trim() || DEFAULT_REQUIRED_TOPICS,
         bodyTemplate:
           settingsForm.bodyTemplate.trim() || DEFAULT_BODY_TEMPLATE,
-      };
+      });
 
       skipConfigReloadRef.current = true;
       const granted = await requestGitHubAccess();
@@ -827,6 +886,7 @@ export function PanelApp() {
 
   useEffect(() => {
     if (!config.dailyAutoPublish) return;
+    const dailyCount = Math.max(1, Math.floor(config.dailyAutoCount) || 5);
     let cancelled = false;
     const tick = async () => {
       if (cancelled || dailyKickRef.current) return;
@@ -840,7 +900,7 @@ export function PanelApp() {
         toUploadInputs(itemsRef.current),
         importAfterRef.current,
       );
-      const queue = takeDailyBatch(pending, AUTO_BATCH_SIZE);
+      const queue = takeDailyBatch(pending, dailyCount);
       if (!queue.length) return;
       dailyKickRef.current = true;
       try {
@@ -862,7 +922,7 @@ export function PanelApp() {
       chrome.tabs.onUpdated.removeListener(onTab);
       chrome.tabs.onActivated.removeListener(onTab);
     };
-  }, [config.dailyAutoPublish]);
+  }, [config.dailyAutoPublish, config.dailyAutoCount]);
 
   const showSyncChrome = syncing || Boolean(status?.syncing);
 
@@ -927,15 +987,31 @@ export function PanelApp() {
       {tab === "main" ? (
         <>
           <div className="redflow-toolbar">
-            <span className="redflow-label">微信图文草稿</span>
-            <span className="redflow-muted">
+            <div className="redflow-toolbar-top">
+              <label className="redflow-source-combo">
+                <span className="redflow-source-combo-tag">数据源</span>
+                <select
+                  className="redflow-source-combo-select"
+                  value={config.activeSourceId}
+                  disabled={showSyncChrome || autoRunning}
+                  onChange={(e) => void switchActiveSource(e.target.value)}
+                >
+                  {config.sources.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name || formatRepoSlug(s.owner, s.repo)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <p className="redflow-toolbar-stats">
               {items.length
                 ? `${items.length} 条 · 未传 ${items.filter((i) => !i.uploaded).length} · 可导 ${items.filter((i) => !i.uploaded && isAfterImportAfter(i.fileId, importAfter)).length} · 已传 ${items.filter((i) => i.uploaded).length}`
                 : "同步后显示"}
               {autoProgress
                 ? ` · 自动 ${autoProgress.current}/${autoProgress.total}`
                 : ""}
-            </span>
+            </p>
           </div>
 
           <div className="redflow-cutoff-bar">
@@ -1165,70 +1241,176 @@ export function PanelApp() {
           <section className="redflow-settings-section">
             <h3 className="redflow-settings-title">GitHub 数据源</h3>
             <p className="redflow-settings-hint">
-              同步只拉草稿索引；导入时再读{" "}
+              可添加多个仓库，每套独立令牌；同步/导入只针对当前源。分支自动用仓库默认分支。
+              导入时再读{" "}
               <code>{DEFAULT_PROMPTS_PATH}/&#123;id&#125;.json</code> 与配图目录。
             </p>
 
-            <label className="redflow-label">
-              GitHub 令牌
-              <input
-                className="redflow-input"
-                type="password"
-                autoComplete="off"
-                placeholder="私有仓必填 ghp_..."
-                value={settingsForm.githubToken}
-                onChange={onSettingsChange("githubToken")}
-              />
+            <label className="redflow-label redflow-source-edit-label">
+              当前编辑
+              <div className="redflow-source-edit-controls">
+                <select
+                  className="redflow-input redflow-source-edit-select"
+                  value={settingsForm.activeSourceId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    const next = normalizeConfig({
+                      ...settingsForm,
+                      activeSourceId: id,
+                    });
+                    setSettingsForm(next);
+                    const src = getActiveSource(next);
+                    setSettingsRepoSlug(
+                      src ? formatRepoSlug(src.owner, src.repo) : "",
+                    );
+                    setSettingsMsg(null);
+                  }}
+                >
+                  {settingsForm.sources.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name || formatRepoSlug(s.owner, s.repo)}
+                    </option>
+                  ))}
+                </select>
+                <div className="redflow-source-actions">
+                  <button
+                    type="button"
+                    className="redflow-icon-btn"
+                    title="添加数据源"
+                    aria-label="添加数据源"
+                    onClick={() => {
+                      const src = createDataSource({
+                        id: newSourceId(),
+                        name: "新数据源",
+                        owner: "owner",
+                        repo: "repo",
+                      });
+                      const next = normalizeConfig({
+                        ...settingsForm,
+                        sources: [...settingsForm.sources, src],
+                        activeSourceId: src.id,
+                      });
+                      setSettingsForm(next);
+                      setSettingsRepoSlug(formatRepoSlug(src.owner, src.repo));
+                      setSettingsMsg("已添加数据源，请填写令牌与仓库后保存");
+                    }}
+                  >
+                    <span aria-hidden>+</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="redflow-icon-btn redflow-icon-btn-danger"
+                    title="删除当前数据源"
+                    aria-label="删除当前数据源"
+                    disabled={settingsForm.sources.length <= 1}
+                    onClick={() => {
+                      if (settingsForm.sources.length <= 1) return;
+                      const src = getActiveSource(settingsForm);
+                      if (src) setSourceDeleteConfirm(src);
+                    }}
+                  >
+                    <span aria-hidden>×</span>
+                  </button>
+                </div>
+              </div>
             </label>
 
-            <label className="redflow-label">
-              仓库（owner/repo）
-              <input
-                className="redflow-input"
-                required
-                placeholder="shalom-lab/InfoFlow"
-                value={settingsRepoSlug}
-                onChange={(e) => {
-                  setSettingsRepoSlug(e.target.value);
-                  setSettingsMsg(null);
-                }}
-              />
-            </label>
+            {(() => {
+              const src = getActiveSource(settingsForm);
+              if (!src) return null;
+              return (
+                <>
+                  <label className="redflow-label">
+                    显示名称
+                    <input
+                      className="redflow-input"
+                      placeholder="InfoFlow"
+                      value={src.name}
+                      onChange={(e) => {
+                        setSettingsForm(
+                          patchActiveSource(settingsForm, {
+                            name: e.target.value,
+                          }),
+                        );
+                        setSettingsMsg(null);
+                      }}
+                    />
+                  </label>
 
-            <div className="redflow-settings-row">
-              <label className="redflow-label">
-                分支
-                <input
-                  className="redflow-input"
-                  placeholder="master"
-                  value={settingsForm.branch}
-                  onChange={onSettingsChange("branch")}
-                />
-              </label>
-              <label className="redflow-label">
-                草稿索引文件
-                <input
-                  className="redflow-input"
-                  placeholder={DEFAULT_DRAFTS_FILE}
-                  value={settingsForm.basePath}
-                  onChange={onSettingsChange("basePath")}
-                />
-              </label>
-            </div>
+                  <label className="redflow-label">
+                    GitHub 令牌
+                    <input
+                      className="redflow-input"
+                      type="password"
+                      autoComplete="off"
+                      placeholder="私有仓必填 ghp_..."
+                      value={src.githubToken}
+                      onChange={(e) => {
+                        setSettingsForm(
+                          patchActiveSource(settingsForm, {
+                            githubToken: e.target.value,
+                          }),
+                        );
+                        setSettingsMsg(null);
+                      }}
+                    />
+                  </label>
 
-            <label className="redflow-label">
-              图片目录
-              <input
-                className="redflow-input"
-                placeholder={DEFAULT_IMAGES_PATH}
-                value={settingsForm.imagesPath}
-                onChange={onSettingsChange("imagesPath")}
-              />
-            </label>
+                  <label className="redflow-label">
+                    仓库（owner/repo）
+                    <input
+                      className="redflow-input"
+                      required
+                      placeholder="shalom-lab/InfoFlow"
+                      value={settingsRepoSlug}
+                      onChange={(e) => {
+                        setSettingsRepoSlug(e.target.value);
+                        setSettingsMsg(null);
+                      }}
+                    />
+                  </label>
+
+                  <label className="redflow-label">
+                    草稿索引文件
+                    <input
+                      className="redflow-input"
+                      placeholder={DEFAULT_DRAFTS_FILE}
+                      value={src.basePath}
+                      onChange={(e) => {
+                        setSettingsForm(
+                          patchActiveSource(settingsForm, {
+                            basePath: e.target.value,
+                          }),
+                        );
+                        setSettingsMsg(null);
+                      }}
+                    />
+                  </label>
+
+                  <label className="redflow-label">
+                    图片目录
+                    <input
+                      className="redflow-input"
+                      placeholder={DEFAULT_IMAGES_PATH}
+                      value={src.imagesPath}
+                      onChange={(e) => {
+                        setSettingsForm(
+                          patchActiveSource(settingsForm, {
+                            imagesPath: e.target.value,
+                          }),
+                        );
+                        setSettingsMsg(null);
+                      }}
+                    />
+                  </label>
+                </>
+              );
+            })()}
 
             <p className="redflow-perm-line">
               GitHub 权限：{githubOk ? "已授予" : "未授予"}
-              {status?.itemCount != null ? ` · 本地 ${status.itemCount} 条` : ""}
+              {status?.itemCount != null ? ` · 本地合计 ${status.itemCount} 条` : ""}
+              {" · 分支：仓库默认分支"}
             </p>
           </section>
 
@@ -1463,18 +1645,36 @@ export function PanelApp() {
                   skipConfigReloadRef.current = true;
                   void saveConfig(next).then(() => {
                     setConfig(next);
+                    const n = next.dailyAutoCount;
                     setSettingsMsg(
                       on
-                        ? "已开启每天自动 5 篇：侧栏开着且发布页打开时自动跑"
+                        ? `已开启每天自动 ${n} 篇：侧栏开着且发布页打开时自动跑`
                         : "已关闭每天自动发布",
                     );
                   });
                 }}
               />
-              <span>每天自动处理 5 篇</span>
+              <span>每天自动处理</span>
             </label>
+            <div className="redflow-settings-row">
+              <label className="redflow-label">
+                每天篇数
+                <input
+                  className="redflow-input"
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={settingsForm.dailyAutoCount}
+                  onChange={(e) =>
+                    persistSettingsPatch({
+                      dailyAutoCount: Number(e.target.value),
+                    })
+                  }
+                />
+              </label>
+            </div>
             <p className="redflow-settings-hint">
-              与「开始自动化」、手动导入同一套逻辑；侧栏与发布页需保持打开。
+              与「开始自动化」、手动导入同一套逻辑；侧栏与发布页需保持打开。待处理不足设定篇数时当天不跑。
             </p>
 
             <label className="redflow-toggle redflow-toggle-block">
@@ -1634,6 +1834,85 @@ export function PanelApp() {
               {preview.urls.map((u) => (
                 <img key={u} src={u} alt="" />
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {sourceDeleteConfirm && (
+        <div
+          className="redflow-confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="redflow-source-delete-title"
+          onClick={() => setSourceDeleteConfirm(null)}
+        >
+          <div
+            className="redflow-confirm-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="redflow-confirm-icon" aria-hidden>
+              !
+            </div>
+            <h3 id="redflow-source-delete-title" className="redflow-confirm-title">
+              删除数据源？
+            </h3>
+            <p className="redflow-confirm-body">
+              即将移除「
+              <strong>
+                {sourceDeleteConfirm.name ||
+                  formatRepoSlug(
+                    sourceDeleteConfirm.owner,
+                    sourceDeleteConfirm.repo,
+                  )}
+              </strong>
+              」（
+              {formatRepoSlug(
+                sourceDeleteConfirm.owner,
+                sourceDeleteConfirm.repo,
+              )}
+              ）。本地该源草稿缓存不会自动清掉；点保存后配置才写入。
+            </p>
+            <div className="redflow-confirm-actions">
+              <button
+                type="button"
+                className="redflow-btn redflow-btn-ghost"
+                onClick={() => setSourceDeleteConfirm(null)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="redflow-btn redflow-btn-danger"
+                onClick={() => {
+                  const removing = sourceDeleteConfirm;
+                  setSourceDeleteConfirm(null);
+                  if (!removing) return;
+                  if (settingsForm.sources.length <= 1) return;
+                  const rest = settingsForm.sources.filter(
+                    (s) => s.id !== removing.id,
+                  );
+                  if (!rest.length) return;
+                  const next = normalizeConfig({
+                    ...settingsForm,
+                    sources: rest,
+                    activeSourceId:
+                      settingsForm.activeSourceId === removing.id
+                        ? rest[0]!.id
+                        : settingsForm.activeSourceId,
+                  });
+                  setSettingsForm(next);
+                  const src = getActiveSource(next);
+                  setSettingsRepoSlug(
+                    src ? formatRepoSlug(src.owner, src.repo) : "",
+                  );
+                  setSettingsMsg(
+                    `已从列表移除「${removing.name || formatRepoSlug(removing.owner, removing.repo)}」，请点保存生效`,
+                  );
+                }}
+              >
+                确认删除
+              </button>
             </div>
           </div>
         </div>

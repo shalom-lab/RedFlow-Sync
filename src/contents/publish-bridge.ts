@@ -16,6 +16,7 @@ import {
 } from "@/lib/dom-inject";
 import { sendRedFlow } from "@/lib/messages";
 import { base64ToBlob } from "@/lib/base64";
+import { withStitchedCover } from "@/lib/stitch-cover";
 
 export type { PublishPhase };
 
@@ -76,11 +77,10 @@ async function loadImageBlobs(msg: {
   });
 
   if (imgsRes.ok && "blobs" in imgsRes && imgsRes.blobs.length) {
-    return {
-      blobs: imgsRes.blobs.map((b) =>
-        base64ToBlob(b.base64, b.mime || "image/png"),
-      ),
-    };
+    const raw = imgsRes.blobs.map((b) =>
+      base64ToBlob(b.base64, b.mime || "image/png"),
+    );
+    return { blobs: await withStitchedCover(raw) };
   }
 
   if (msg.imageRawUrl) {
@@ -90,7 +90,9 @@ async function loadImageBlobs(msg: {
     });
     if (remote.ok && "blob" in remote) {
       return {
-        blobs: [base64ToBlob(remote.blob, remote.mime || "image/png")],
+        blobs: await withStitchedCover([
+          base64ToBlob(remote.blob, remote.mime || "image/png"),
+        ]),
       };
     }
   }

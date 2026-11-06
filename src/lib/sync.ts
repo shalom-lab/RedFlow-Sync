@@ -8,10 +8,12 @@ import {
   fetchJsonFile,
   getFileMeta,
   joinPath,
+  resolveRepo,
   type GitHubContentItem,
+  type ResolvedRepo,
 } from "./github";
 import {
-  idbClearItemsStore,
+  idbClearCategory,
   idbClearMediaForDraft,
   idbCountItems,
   idbGetMeta,
@@ -29,10 +31,16 @@ import {
 import { createThumbnailBlob } from "./thumb";
 import { getConfig } from "./storage";
 import {
+  getActiveSource,
+  getSourceByCategory,
+  sourceCategory,
+} from "./sources";
+import {
   DRAFTS_CATEGORY,
   DEFAULT_DRAFTS_FILE,
   DEFAULT_IMAGES_PATH,
   DEFAULT_PROMPTS_PATH,
+  type DataSource,
   type ExtensionConfig,
   type WechatDraftItem,
 } from "@/types";
@@ -47,14 +55,14 @@ export function isSyncing(): boolean {
   return activeSync != null;
 }
 
-function draftsFilePath(config: ExtensionConfig): string {
-  const raw = (config.basePath || DEFAULT_DRAFTS_FILE).trim().replace(/^\/+/, "");
+function draftsFilePath(source: DataSource): string {
+  const raw = (source.basePath || DEFAULT_DRAFTS_FILE).trim().replace(/^\/+/, "");
   return raw || DEFAULT_DRAFTS_FILE;
 }
 
 /** 配图目录；配置若写成 …/Images 会自动补 Prompt */
-function imagesRoot(config: ExtensionConfig): string {
-  const raw = (config.imagesPath || DEFAULT_IMAGES_PATH)
+function imagesRoot(source: DataSource): string {
+  const raw = (source.imagesPath || DEFAULT_IMAGES_PATH)
     .trim()
     .replace(/^\/+|\/+$/g, "");
   const root = raw || DEFAULT_IMAGES_PATH;
@@ -64,8 +72,8 @@ function imagesRoot(config: ExtensionConfig): string {
 }
 
 /** 与配图同级：…/Images/Prompt → …/Prompt */
-function promptsRoot(config: ExtensionConfig): string {
-  const images = imagesRoot(config);
+function promptsRoot(source: DataSource): string {
+  const images = imagesRoot(source);
   const m = images.match(/^(.*)\/Images\/Prompt$/i);
   if (m) {
     const base = (m[1] || "").replace(/^\/+|\/+$/g, "");
@@ -171,20 +179,20 @@ type PromptMetaJson = {
 };
 
 async function probeImageInPromptDir(
-  config: ExtensionConfig,
+  source: DataSource,
+  repo: ResolvedRepo,
   stem: string,
 ): Promise<GitHubContentItem | null> {
-  const dir = imagesRoot(config);
+  const dir = imagesRoot(source);
   for (const ext of IMAGE_EXTS) {
     const path = joinPath(dir, `${stem}.${ext}`);
     try {
-      const meta = await getFileMeta(config, path);
+      const meta = await getFileMeta(repo, path);
       if (meta) return meta;
     } catch (err) {
       console.warn(`[RedFlow] getFileMeta 失败 ${path}`, err);
     }
   }
-  // Contents API 不可用时，仍按 Images/Prompt/{id}.png 构造路径，交给 raw 下载
   return {
     name: `${stem}.png`,
     path: joinPath(dir, `${stem}.png`),
@@ -201,16 +209,17 @@ async function probeImageInPromptDir(
  * 3. 到 Images/Prompt/{图片id}.png 下载（不跟 JSON 里的相对路径走）
  */
 export async function resolveDraftImageEntries(
-  config: ExtensionConfig,
+  source: DataSource,
+  repo: ResolvedRepo,
   draftId: string,
 ): Promise<GitHubContentItem[]> {
   const key = draftId.trim();
   if (!key) return [];
 
-  const jsonPath = joinPath(promptsRoot(config), `${key}.json`);
+  const jsonPath = joinPath(promptsRoot(source), `${key}.json`);
   let meta: PromptMetaJson;
   try {
-    meta = await fetchJsonFile<PromptMetaJson>(config, jsonPath);
+    meta = await fetchJsonFile<PromptMetaJson>(repo, jsonPath);
   } catch (err) {
     console.warn(`[RedFlow] 读取 Prompt JSON 失败 ${jsonPath}`, err);
     return [];
@@ -228,12 +237,12 @@ export async function resolveDraftImageEntries(
   console.info(
     `[RedFlow] ${key} 配图 id：`,
     stems,
-    `→ ${imagesRoot(config)}/{id}.png`,
+    `→ ${imagesRoot(source)}/{id}.png`,
   );
 
   const entries: GitHubContentItem[] = [];
   for (const stem of stems) {
-    const file = await probeImageInPromptDir(config, stem);
+    const file = await probeImageInPromptDir(source, repo, stem);
     if (file) entries.push(file);
   }
   return entries;
@@ -241,15 +250,18 @@ export async function resolveDraftImageEntries(
 
 /** 导入时按草稿 id → Prompt/{id}.json → Images/Prompt/{图片id}.png */
 export async function cacheDraftImages(
-  config: ExtensionConfig,
+  source: DataSource,
   draftId: string,
+  category?: string,
 ): Promise<{ count: number; paths: string[] }> {
-  const entries = await resolveDraftImageEntries(config, draftId);
+  const repo = await resolveRepo(source);
+  const entries = await resolveDraftImageEntries(source, repo, draftId);
   if (!entries.length) {
     return { count: 0, paths: [] };
   }
 
-  const dir = imagesRoot(config);
+  const cat = category || sourceCategory(source.id);
+  const dir = imagesRoot(source);
   const images: Array<{ blob: Blob; mime: string; sha: string | null }> = [];
   const paths: string[] = [];
 
@@ -259,7 +271,7 @@ export async function cacheDraftImages(
     for (const ext of IMAGE_EXTS) {
       const path = joinPath(dir, `${stem}.${ext}`);
       try {
-        const blob = await fetchBlob(config, path);
+        const blob = await fetchBlob(repo, path);
         const mime =
           blob.type && blob.type.startsWith("image/")
             ? blob.type
@@ -280,14 +292,14 @@ export async function cacheDraftImages(
   }
 
   if (images.length) {
-    await idbReplaceImages(DRAFTS_CATEGORY, draftId, images);
+    await idbReplaceImages(cat, draftId, images);
   }
   return { count: images.length, paths };
 }
 
 /**
- * 同步草稿索引（仅 JSON，不同步图片）。
- * 配图在导入单条时按需下载，上传成功后删除本地缓存。
+ * 同步当前激活数据源的草稿索引（仅 JSON，不同步图片）。
+ * 只替换该源 category 下的条目，不动其他数据源。
  */
 export async function runIncrementalSync(
   config: ExtensionConfig,
@@ -306,9 +318,15 @@ export async function runIncrementalSync(
     };
 
     try {
-      await assertGitHubReady(config);
-      const path = draftsFilePath(config);
-      const raw = await fetchJsonFile<unknown>(config, path);
+      const source = getActiveSource(config);
+      if (!source) {
+        throw new Error("尚未配置数据源");
+      }
+      await assertGitHubReady(source);
+      const repo = await resolveRepo(source);
+      const cat = sourceCategory(source.id);
+      const path = draftsFilePath(source);
+      const raw = await fetchJsonFile<unknown>(repo, path);
       const drafts = extractDraftItems(raw);
       if (!drafts.length) {
         throw new Error(
@@ -316,27 +334,26 @@ export async function runIncrementalSync(
         );
       }
 
-      const prevRows = await idbListByCategory(DRAFTS_CATEGORY);
+      const prevRows = await idbListByCategory(cat);
       const prevById = new Map(prevRows.map((r) => [r.fileId, r]));
-      await idbClearItemsStore();
+      await idbClearCategory(cat);
 
       const now = new Date().toISOString();
-      const promptDir = promptsRoot(config);
+      const promptDir = promptsRoot(source);
 
       for (const draft of drafts) {
         const prev = prevById.get(draft.id);
-        // 配图路径以 Prompt/{id}.json 的 image/images 为准，导入时再解析下载
         const imagePath = joinPath(promptDir, `${draft.id}.json`);
         const record: CachedItemRecord = {
-          key: itemKey(DRAFTS_CATEGORY, draft.id),
+          key: itemKey(cat, draft.id),
           fileId: draft.id,
-          category: DRAFTS_CATEGORY,
+          category: cat,
           title: draft.wechat_title || `【草稿】${draft.id}`,
           body: draftBody(draft, config.bodyTemplate),
           keywords: draft.keywords,
           replyKeyword: draft.reply_keyword,
           imagePath,
-          imageRawUrl: buildRawUrl(config, imagePath),
+          imageRawUrl: buildRawUrl(repo, imagePath),
           jsonPath: path,
           jsonSha: `drafts:${drafts.length}:${draft.id}`,
           imageSha: null,
@@ -352,7 +369,7 @@ export async function runIncrementalSync(
       await idbSetMeta({
         lastSyncAt: new Date().toISOString(),
         lastError: null,
-        lastResultSummary: `drafts ${result.fetchedJson} from ${path} (images on import)`,
+        lastResultSummary: `${source.name}: drafts ${result.fetchedJson} from ${path} @${repo.branch}`,
       });
       return result;
     } catch (e) {
@@ -427,11 +444,14 @@ export async function getImagesArrayBuffers(
   }
 
   // 导入时再下：不同步全量图，按条从 GitHub 拉
-  // 注意：Service Worker 里禁止 await import()——Vite preload 会访问 window
   try {
     const config = await getConfig();
-    await assertGitHubReady(config);
-    const cached = await cacheDraftImages(config, fileId);
+    const source = getSourceByCategory(config, category);
+    if (!source) {
+      throw new Error("未找到对应数据源，请先在设置里配置仓库");
+    }
+    await assertGitHubReady(source);
+    const cached = await cacheDraftImages(source, fileId, category);
     if (!cached.count) return [];
   } catch (err) {
     console.warn(`[RedFlow] import-time image fetch fail ${fileId}`, err);

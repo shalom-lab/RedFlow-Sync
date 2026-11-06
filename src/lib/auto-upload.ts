@@ -38,12 +38,13 @@ export function takeBatchMultiple<T>(
   return items.slice(0, n);
 }
 
-/** 每天自动：有满 5 篇才跑，且只跑 5 篇 */
+/** 每天自动：待处理 ≥ size 才跑，且只跑 size 篇 */
 export function takeDailyBatch<T>(
   items: T[],
   size = AUTO_BATCH_SIZE,
 ): T[] {
-  return items.length >= size ? items.slice(0, size) : [];
+  const n = Math.max(1, Math.floor(size) || AUTO_BATCH_SIZE);
+  return items.length >= n ? items.slice(0, n) : [];
 }
 
 /**

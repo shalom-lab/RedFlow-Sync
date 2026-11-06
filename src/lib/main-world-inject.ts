@@ -909,15 +909,20 @@ export async function clickZancunLeaveInMainWorld(
   const norm = (s: string) => s.replace(/\s+/g, "").trim();
   const wantSchedule = kind === "schedule";
 
+  const isScheduleSubmit = (t: string) =>
+    t === "定时发布" ||
+    t === "定时发表" ||
+    (t.startsWith("定时") && (t.includes("发布") || t.includes("发表")));
+
   const isHit = (el: Element | null) => {
     if (!el) return false;
     const t = norm(el.textContent || "");
     const cls = String((el as HTMLElement).className || "");
     if (wantSchedule) {
-      return cls.includes("bg-red") && t === "定时发布";
+      return isScheduleSubmit(t);
     }
     if (cls.includes("bg-red")) return false;
-    if (t === "定时发布" || t === "发布") return false;
+    if (isScheduleSubmit(t) || t === "发布") return false;
     return t === "暂存离开";
   };
 
@@ -970,7 +975,9 @@ export async function clickZancunLeaveInMainWorld(
         !blocked &&
         r.width >= 80 &&
         r.height >= 24 &&
-        (!wantSchedule || submitText.includes("定时"));
+        (!wantSchedule ||
+          isScheduleSubmit(norm(submitText)) ||
+          submitText.includes("定时"));
       if (ready) break;
       host = null;
     }
@@ -980,15 +987,18 @@ export async function clickZancunLeaveInMainWorld(
     return {
       ok: false,
       error: wantSchedule
-        ? "未找到可点的红色「定时发布」（请确认已勾选并填好定时）"
+        ? "未找到可点的红色「定时发布/定时发表」（请确认已勾选并填好定时）"
         : "未找到 xhs-publish-btn",
     };
   }
 
   if (wantSchedule) {
     const submitText = host.getAttribute("submit-text") || "";
-    if (!submitText.includes("定时")) {
-      return { ok: false, error: `红按钮是「${submitText || "发布"}」，未点，避免立即发布` };
+    if (!isScheduleSubmit(norm(submitText)) && !submitText.includes("定时")) {
+      return {
+        ok: false,
+        error: `红按钮是「${submitText || "发布"}」，未点，避免立即发布`,
+      };
     }
   } else {
     const saveText = host.getAttribute("save-text") || "";
@@ -1026,7 +1036,7 @@ export async function clickZancunLeaveInMainWorld(
   return {
     ok: false,
     error: wantSchedule
-      ? "坐标未打到红色「定时发布」。未勾选定时时红按钮是「发布」，不会点。"
+      ? "坐标未打到红色「定时发布/定时发表」。未勾选定时时红按钮是「发布」，不会点。"
       : "坐标未打到白色「暂存离开」（closed shadow）",
   };
 }

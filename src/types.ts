@@ -22,12 +22,14 @@ export const DEFAULT_PACE_MS: PaceConfig = {
   betweenDrafts: 2600,
 };
 
-/** GitHub / 插件配置（Options / Popup 持久化） */
-export interface ExtensionConfig {
+/** 单个 GitHub 数据源（分支固定用仓库默认分支，不单独配置） */
+export interface DataSource {
+  id: string;
+  /** 侧栏展示名 */
+  name: string;
   githubToken: string;
   owner: string;
   repo: string;
-  branch: string;
   /**
    * 草稿索引文件路径（相对仓库根）
    * 默认：data/wechat_newspic_drafts.json
@@ -38,10 +40,17 @@ export interface ExtensionConfig {
    * 导入时先读同级 Prompt/{id}.json 的 image/images，再按文件名取图。
    */
   imagesPath: string;
-  /** 保留字段；当前草稿同步不依赖分类 */
-  categories: string;
-  /** 侧栏打开且发布页在时，每天自动处理 5 篇 */
+}
+
+/** GitHub / 插件配置（Options / Popup 持久化） */
+export interface ExtensionConfig {
+  sources: DataSource[];
+  /** 当前激活的数据源 id */
+  activeSourceId: string;
+  /** 侧栏打开且发布页在时，是否每天自动处理一批 */
   dailyAutoPublish: boolean;
+  /** 每天自动处理篇数（1–50，默认 5） */
+  dailyAutoCount: number;
   /**
    * 把发布页拆成独立小窗，贴在屏幕右侧。
    * 自动化仍在前台可见窗口里跑，但不占满整屏。
@@ -84,8 +93,10 @@ export interface ExtensionConfig {
   bodyTemplate: string;
 }
 
-/** 本地缓存使用的固定分类名（后续按 Prompt 配图仍挂在此分类下） */
+/** 旧版单源本地缓存分类名（迁移后写入 ds:default） */
 export const DRAFTS_CATEGORY = "wechat_drafts";
+/** 从旧配置迁移出的默认数据源 id */
+export const LEGACY_SOURCE_ID = "default";
 
 export const DEFAULT_DRAFTS_FILE = "data/wechat_newspic_drafts.json";
 /** Prompt 元数据：infoflow-data/Prompt/{id}.json */
@@ -104,15 +115,21 @@ export const DEFAULT_BODY_TEMPLATE = [
   "{topics}",
 ].join("\n");
 
-export const DEFAULT_CONFIG: ExtensionConfig = {
+const DEFAULT_SOURCE: DataSource = {
+  id: LEGACY_SOURCE_ID,
+  name: "InfoFlow",
   githubToken: "",
   owner: "shalom-lab",
   repo: "InfoFlow",
-  branch: "master",
   basePath: DEFAULT_DRAFTS_FILE,
   imagesPath: DEFAULT_IMAGES_PATH,
-  categories: "",
+};
+
+export const DEFAULT_CONFIG: ExtensionConfig = {
+  sources: [{ ...DEFAULT_SOURCE }],
+  activeSourceId: LEGACY_SOURCE_ID,
   dailyAutoPublish: false,
+  dailyAutoCount: 5,
   compactPublishWindow: false,
   submitMode: "draft",
   scheduleStartHour: 10,
