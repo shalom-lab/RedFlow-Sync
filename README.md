@@ -152,6 +152,35 @@ npm run sync-version  # 同步 package.json / manifest 版本
 
 推送 semver tag（如 `v1.2.1`）会触发 GitHub Release zip，以及 Chrome Web Store 上传（需配置 Secrets）。
 
+### 调试脚本（`scripts/`）
+
+小红书创作者页 DOM 常变时，可用下面脚本只读探查，**不会点红色「发布 / 定时发布」**。
+
+| 脚本 | 用途 |
+|------|------|
+| `cdp-probe-schedule.mjs` | 经 CDP `9222` 扫描发布页定时相关节点（如 `.post-time-wrapper`）与带 `submit-text` 的底部宿主 |
+| `cdp-probe-switch-state.mjs` | 经 CDP `9222` 读当前定时开关状态、`submit-text` 文案（是否已变成「定时*」） |
+| `console-upload-test.js` | 在已登录的发布页 DevTools Console 里粘贴运行：点「上传图文」、灌一张测试图并填标题正文，方便对照灌图链路 |
+
+CDP 前置（独立用户目录，勿抢日常 Chrome）：
+
+```powershell
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" `
+  --remote-debugging-port=9222 `
+  --remote-allow-origins=* `
+  --user-data-dir="$env:LOCALAPPDATA\chrome-cdp-debug" `
+  --profile-directory="Profile 1" `
+  --no-first-run `
+  --no-default-browser-check
+```
+
+打开并登录 [图文发布页](https://creator.xiaohongshu.com/publish/publish?target=image) 后：
+
+```bash
+node scripts/cdp-probe-schedule.mjs
+node scripts/cdp-probe-switch-state.mjs
+```
+
 ### 核心模块
 
 - `src/sidepanel/` — 侧栏 UI
