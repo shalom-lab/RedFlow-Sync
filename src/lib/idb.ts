@@ -23,6 +23,8 @@ export interface CachedItemRecord {
   uploaded: boolean;
   /** 导入成功时间；未导入为 null */
   uploadedAt: string | null;
+  /** 配图张数（来自 Prompt / 已缓存图）；未知为 null */
+  imageCount?: number | null;
 }
 
 export interface CachedImageRecord {
@@ -114,26 +116,6 @@ export async function idbMarkUploaded(
   };
   await idbPutItem(next);
   return next;
-}
-
-export async function idbClearUploadedFlags(): Promise<number> {
-  const db = await openDb();
-  const tx = db.transaction("items", "readonly");
-  const rows = (await reqToPromise(
-    tx.objectStore("items").getAll(),
-  )) as CachedItemRecord[];
-  let n = 0;
-  for (const row of rows) {
-    if (row.uploaded || row.uploadedAt) {
-      await idbPutItem({
-        ...row,
-        uploaded: false,
-        uploadedAt: null,
-      });
-      n += 1;
-    }
-  }
-  return n;
 }
 
 export async function idbGetItem(
@@ -338,10 +320,11 @@ export async function idbHasThumb(
   return idbHasKey("thumbs", category, fileId);
 }
 
-/** 一次事务批量查某分类下 images/thumbs 是否存在 */
+/** 一次事务批量查某分类下 images/thumbs 是否存在，并统计每条配图张数 */
 export async function idbMediaFlagsByCategory(category: string): Promise<{
   imageKeys: Set<string>;
   thumbKeys: Set<string>;
+  imageCounts: Map<string, number>;
 }> {
   const db = await openDb();
   const storeNames = ["images", "thumbs"].filter((n) =>
@@ -349,25 +332,47 @@ export async function idbMediaFlagsByCategory(category: string): Promise<{
   );
   const tx = db.transaction(storeNames, "readonly");
 
-  const collectKeys = async (storeName: string): Promise<Set<string>> => {
+  const collect = async (
+    storeName: string,
+  ): Promise<{ keys: Set<string>; counts: Map<string, number> }> => {
     const store = tx.objectStore(storeName);
     const allKeys = await reqToPromise(store.getAllKeys());
-    const set = new Set<string>();
+    const keys = new Set<string>();
+    const counts = new Map<string, number>();
     for (const k of allKeys) {
       const fileId = fileIdFromMediaKey(String(k), category);
-      if (fileId) set.add(fileId);
+      if (!fileId) continue;
+      keys.add(fileId);
+      counts.set(fileId, (counts.get(fileId) ?? 0) + 1);
     }
-    return set;
+    return { keys, counts };
   };
 
-  const imageKeys = storeNames.includes("images")
-    ? await collectKeys("images")
-    : new Set<string>();
-  const thumbKeys = storeNames.includes("thumbs")
-    ? await collectKeys("thumbs")
-    : new Set<string>();
+  const images = storeNames.includes("images")
+    ? await collect("images")
+    : { keys: new Set<string>(), counts: new Map<string, number>() };
+  const thumbs = storeNames.includes("thumbs")
+    ? await collect("thumbs")
+    : { keys: new Set<string>(), counts: new Map<string, number>() };
 
-  return { imageKeys, thumbKeys };
+  return {
+    imageKeys: images.keys,
+    thumbKeys: thumbs.keys,
+    imageCounts: images.counts,
+  };
+}
+
+/** 写入/更新条目上的配图张数 */
+export async function idbSetImageCount(
+  category: string,
+  fileId: string,
+  count: number,
+): Promise<void> {
+  const prev = await idbGetItem(category, fileId);
+  if (!prev) return;
+  const n = Math.max(0, Math.floor(count));
+  if (prev.imageCount === n) return;
+  await idbPutItem({ ...prev, imageCount: n });
 }
 
 export async function idbCountItems(): Promise<number> {

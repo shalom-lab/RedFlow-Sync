@@ -25,11 +25,12 @@ import {
   idbPutItem,
   idbPutThumb,
   idbReplaceImages,
+  idbSetImageCount,
   idbSetMeta,
   type CachedItemRecord,
 } from "./idb";
 import { createThumbnailBlob } from "./thumb";
-import { getConfig } from "./storage";
+import { getConfig, getUploadHistory, isUploaded } from "./storage";
 import {
   getActiveSource,
   getSourceByCategory,
@@ -293,6 +294,10 @@ export async function cacheDraftImages(
 
   if (images.length) {
     await idbReplaceImages(cat, draftId, images);
+    await idbSetImageCount(cat, draftId, images.length);
+  } else if (entries.length) {
+    // 解析到张数但下载失败时仍记下预期张数
+    await idbSetImageCount(cat, draftId, entries.length);
   }
   return { count: images.length, paths };
 }
@@ -336,6 +341,7 @@ export async function runIncrementalSync(
 
       const prevRows = await idbListByCategory(cat);
       const prevById = new Map(prevRows.map((r) => [r.fileId, r]));
+      const history = await getUploadHistory();
       await idbClearCategory(cat);
 
       const now = new Date().toISOString();
@@ -343,6 +349,10 @@ export async function runIncrementalSync(
 
       for (const draft of drafts) {
         const prev = prevById.get(draft.id);
+        const hist = isUploaded(history, cat, draft.id);
+        const uploaded = Boolean(prev?.uploaded) || hist.uploaded;
+        const uploadedAt =
+          prev?.uploadedAt ?? hist.uploadedAt ?? (uploaded ? now : null);
         const imagePath = joinPath(promptDir, `${draft.id}.json`);
         const record: CachedItemRecord = {
           key: itemKey(cat, draft.id),
@@ -358,11 +368,37 @@ export async function runIncrementalSync(
           jsonSha: `drafts:${drafts.length}:${draft.id}`,
           imageSha: null,
           updatedAt: now,
-          uploaded: prev?.uploaded ?? false,
-          uploadedAt: prev?.uploadedAt ?? null,
+          uploaded,
+          uploadedAt,
+          imageCount: prev?.imageCount ?? null,
         };
         await idbPutItem(record);
         result.fetchedJson += 1;
+      }
+
+      // 轻量补全配图张数：只读 Prompt/{id}.json，不探图、不下载；已有张数的跳过
+      const needCount = drafts.filter((d) => {
+        const prev = prevById.get(d.id);
+        return !(typeof prev?.imageCount === "number" && prev.imageCount > 0);
+      });
+      const CONCURRENCY = 6;
+      for (let i = 0; i < needCount.length; i += CONCURRENCY) {
+        const chunk = needCount.slice(i, i + CONCURRENCY);
+        await Promise.all(
+          chunk.map(async (draft) => {
+            try {
+              const jsonPath = joinPath(promptDir, `${draft.id}.json`);
+              const meta = await fetchJsonFile<PromptMetaJson>(repo, jsonPath);
+              const n = mergePromptImageFields(meta.image, meta.images).slice(
+                0,
+                MAX_DRAFT_IMAGES,
+              ).length;
+              if (n > 0) await idbSetImageCount(cat, draft.id, n);
+            } catch (err) {
+              console.warn(`[RedFlow] 配图张数探测失败 ${draft.id}`, err);
+            }
+          }),
+        );
       }
 
       result.durationMs = Date.now() - started;
@@ -407,24 +443,33 @@ export async function getLocalItemsDto(
     idbMediaFlagsByCategory(cat),
   ]);
   return rows
-    .map((row) => ({
-      fileId: row.fileId,
-      category: row.category,
-      title: row.title,
-      body: row.body,
-      keywords: row.keywords ?? [],
-      replyKeyword: row.replyKeyword ?? "",
-      imagePath: row.imagePath,
-      imageRawUrl: row.imageRawUrl,
-      jsonPath: row.jsonPath,
-      jsonSha: row.jsonSha,
-      imageSha: row.imageSha,
-      updatedAt: row.updatedAt,
-      uploaded: Boolean(row.uploaded),
-      uploadedAt: row.uploadedAt ?? null,
-      hasImage: flags.imageKeys.has(row.fileId),
-      hasThumb: flags.thumbKeys.has(row.fileId),
-    }))
+    .map((row) => {
+      const cachedCount = flags.imageCounts.get(row.fileId) ?? 0;
+      const stored =
+        typeof row.imageCount === "number" && row.imageCount > 0
+          ? row.imageCount
+          : 0;
+      const imageCount = Math.max(cachedCount, stored);
+      return {
+        fileId: row.fileId,
+        category: row.category,
+        title: row.title,
+        body: row.body,
+        keywords: row.keywords ?? [],
+        replyKeyword: row.replyKeyword ?? "",
+        imagePath: row.imagePath,
+        imageRawUrl: row.imageRawUrl,
+        jsonPath: row.jsonPath,
+        jsonSha: row.jsonSha,
+        imageSha: row.imageSha,
+        updatedAt: row.updatedAt,
+        uploaded: Boolean(row.uploaded),
+        uploadedAt: row.uploadedAt ?? null,
+        hasImage: flags.imageKeys.has(row.fileId) || imageCount > 0,
+        hasThumb: flags.thumbKeys.has(row.fileId),
+        imageCount,
+      };
+    })
     .sort((a, b) => Number(a.uploaded) - Number(b.uploaded));
 }
 

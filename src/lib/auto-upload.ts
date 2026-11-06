@@ -160,15 +160,14 @@ export async function runDraftToXiaohongshuDraft(
   };
 }
 
-/** 未入库小红书草稿的条目，按 id（时间戳前缀）从旧到新；可按导入起点过滤 */
+/** 未入库小红书草稿的条目，按 id（时间戳前缀）从旧到新；可按单日门槛过滤 */
 export function pickOldestPending(
   items: Array<DraftUploadInput & { uploaded?: boolean }>,
   importAfter?: string | null,
 ): DraftUploadInput[] {
   return items
     .filter(
-      (it) =>
-        !it.uploaded && isAfterImportAfter(it.fileId, importAfter),
+      (it) => !it.uploaded && isAfterImportAfter(it.fileId, importAfter),
     )
     .slice()
     .sort((a, b) =>

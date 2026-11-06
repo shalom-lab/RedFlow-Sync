@@ -1,10 +1,11 @@
 import {
   getConfig,
-  bumpImportAfter,
   hasMigratedLegacyIdbCategory,
   markLegacyIdbCategoryMigrated,
+  markUploaded,
+  clearDailyAutoDate,
 } from "@/lib/storage";
-import { getActiveSource, sourceCategory, sourceIdFromCategory } from "@/lib/sources";
+import { getActiveSource, sourceCategory } from "@/lib/sources";
 import { idbMigrateCategory } from "@/lib/idb";
 import { LEGACY_SOURCE_ID } from "@/types";
 import { hasGitHubAccess } from "@/lib/permissions";
@@ -17,9 +18,8 @@ import {
   runIncrementalSync,
   syncIfStale,
 } from "@/lib/sync";
-import { idbClearDraftIndex, idbClearUploadedFlags, idbMarkUploaded } from "@/lib/idb";
+import { idbClearDraftIndex, idbMarkUploaded } from "@/lib/idb";
 import { arrayBufferToBase64 } from "@/lib/base64";
-import { clearDailyAutoDate, clearUploadHistory } from "@/lib/storage";
 import type { RedFlowRequest, RedFlowResponse } from "@/lib/messages";
 import {
   assembleUploadInputFromWindowB64,
@@ -579,10 +579,8 @@ chrome.runtime.onMessage.addListener(
             } satisfies RedFlowResponse);
             return;
           }
-          await bumpImportAfter(
-            message.fileId,
-            sourceIdFromCategory(message.category) ?? undefined,
-          );
+          // 持久写入 chrome.storage，清空列表 / 重新同步后仍防重复
+          await markUploaded(message.category, message.fileId);
           // 配图留在 IndexedDB，历史页可点开查看
           reply({
             ok: true,
@@ -591,18 +589,9 @@ chrome.runtime.onMessage.addListener(
           return;
         }
 
-        if (message.type === "CLEAR_UPLOADED") {
-          await idbClearUploadedFlags();
-          reply({
-            ok: true,
-            status: await getSyncStatusDto(),
-          } satisfies RedFlowResponse);
-          return;
-        }
-
         if (message.type === "WIPE_ALL_DATA") {
+          // 只清草稿索引；已传 id 永久保留，不同步清空
           await idbClearDraftIndex();
-          await clearUploadHistory();
           await clearDailyAutoDate();
           reply({
             ok: true,

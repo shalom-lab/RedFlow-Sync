@@ -8,7 +8,7 @@ import {
   type ExtensionConfig,
   type UploadHistory,
 } from "@/types";
-import { compareFileIdTime } from "./draft-time";
+import { normalizeImportWindow } from "./draft-time";
 import { itemKey } from "./keys";
 import { normalizePace } from "./pace";
 import { normalizeSchedulePlan } from "./schedule";
@@ -19,13 +19,25 @@ import {
   sourceCategory,
 } from "./sources";
 
+/** 短暂用过的双端窗口 → 单门槛（from 的前一日末尾） */
+function windowFromToAfter(fromDay: string): string {
+  const day = fromDay.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return "";
+  const d = new Date(`${day}T12:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) return "";
+  d.setUTCDate(d.getUTCDate() - 1);
+  return `${d.toISOString().slice(0, 10)}T23-59-59-999Z`;
+}
+
 const CONFIG_KEY = "redflow_config";
 const HISTORY_KEY = "redflow_upload_history";
 const DAILY_AUTO_DATE_KEY = "redflow_daily_auto_date";
 /** 旧版全局导入起点 */
 const IMPORT_AFTER_KEY = "redflow_import_after";
-/** 按数据源的导入起点 map */
+/** 按数据源的旧版单门槛 map */
 const IMPORT_AFTER_MAP_KEY = "redflow_import_after_by_source";
+/** 按数据源的时间筛选窗口 { from, to }（YYYY-MM-DD） */
+const IMPORT_WINDOW_MAP_KEY = "redflow_import_window_by_source";
 const LEGACY_IDB_MIGRATED_KEY = "redflow_legacy_idb_category_migrated";
 
 function migrateSourcesFromLegacy(
@@ -176,10 +188,6 @@ export function isUploaded(
   return { uploaded: false };
 }
 
-export async function clearUploadHistory(): Promise<void> {
-  await chrome.storage.local.remove(HISTORY_KEY);
-}
-
 export function localDateKey(now = new Date()): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
@@ -202,16 +210,32 @@ async function readImportAfterMap(): Promise<Record<string, string>> {
   const result = await chrome.storage.sync.get([
     IMPORT_AFTER_MAP_KEY,
     IMPORT_AFTER_KEY,
+    IMPORT_WINDOW_MAP_KEY,
   ]);
-  const map =
-    (result[IMPORT_AFTER_MAP_KEY] as Record<string, string> | undefined) ?? {};
+  const map = {
+    ...((result[IMPORT_AFTER_MAP_KEY] as Record<string, string> | undefined) ??
+      {}),
+  };
   const legacy = String(result[IMPORT_AFTER_KEY] ?? "").trim();
   if (legacy && !map[LEGACY_SOURCE_ID]) {
-    return { ...map, [LEGACY_SOURCE_ID]: legacy };
+    map[LEGACY_SOURCE_ID] = legacy;
+  }
+
+  // 若某源只有短暂双端窗口、没有单门槛，折回单门槛
+  const winRaw =
+    (result[IMPORT_WINDOW_MAP_KEY] as
+      | Record<string, { from?: string; to?: string }>
+      | undefined) ?? {};
+  for (const [sid, raw] of Object.entries(winRaw)) {
+    if (map[sid]) continue;
+    const win = normalizeImportWindow(raw);
+    const after = windowFromToAfter(win.from);
+    if (after) map[sid] = after;
   }
   return map;
 }
 
+/** 单日门槛：该日及以前不可导；空=不限。上传成功不会改它。 */
 export async function getImportAfter(sourceId?: string): Promise<string> {
   const cfg = await getConfig();
   const sid = (sourceId || cfg.activeSourceId || LEGACY_SOURCE_ID).trim();
@@ -230,23 +254,16 @@ export async function setImportAfter(
   if (!v) delete map[sid];
   else map[sid] = v;
   await chrome.storage.sync.set({ [IMPORT_AFTER_MAP_KEY]: map });
-  // 清理旧全局键，避免双源
   await chrome.storage.sync.remove(IMPORT_AFTER_KEY);
-}
-
-/** 仅当 fileId 新于当前门槛时推进；返回是否写入 */
-export async function bumpImportAfter(
-  fileId: string,
-  sourceId?: string,
-): Promise<boolean> {
-  const id = fileId.trim();
-  if (!id) return false;
-  const cfg = await getConfig();
-  const sid = (sourceId || cfg.activeSourceId || LEGACY_SOURCE_ID).trim();
-  const cur = await getImportAfter(sid);
-  if (cur && compareFileIdTime(id, cur) <= 0) return false;
-  await setImportAfter(id, sid);
-  return true;
+  // 清掉该源的双端窗口残留
+  const winResult = await chrome.storage.sync.get(IMPORT_WINDOW_MAP_KEY);
+  const winMap = {
+    ...((winResult[IMPORT_WINDOW_MAP_KEY] as Record<string, unknown>) ?? {}),
+  };
+  if (sid in winMap) {
+    delete winMap[sid];
+    await chrome.storage.sync.set({ [IMPORT_WINDOW_MAP_KEY]: winMap });
+  }
 }
 
 export async function hasMigratedLegacyIdbCategory(): Promise<boolean> {

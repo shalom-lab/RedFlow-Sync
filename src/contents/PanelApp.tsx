@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   DEFAULT_CONFIG,
   DEFAULT_BODY_TEMPLATE,
@@ -32,7 +32,7 @@ import {
   formatDraftTime,
   importAfterToDateInput,
   isAfterImportAfter,
-  maxUploadedFileId,
+  parseDayInput,
 } from "@/lib/draft-time";
 import { getCategoryList } from "@/lib/github";
 import {
@@ -41,7 +41,6 @@ import {
   type SyncStatusDTO,
 } from "@/lib/messages";
 import {
-  clearUploadHistory,
   getConfig,
   getDailyAutoDate,
   getImportAfter,
@@ -99,6 +98,14 @@ function sortPanelItems(
     if (a.uploaded !== b.uploaded) return Number(a.uploaded) - Number(b.uploaded);
     return a.fileId.localeCompare(b.fileId, undefined, { numeric: true });
   });
+}
+
+function imgBadgeClass(count: number): string {
+  if (count <= 0) return "is-unknown";
+  if (count === 1) return "is-n1";
+  if (count === 2) return "is-n2";
+  if (count === 3) return "is-n3";
+  return "is-n4";
 }
 
 function formatUploadTime(iso: string | null): string {
@@ -187,18 +194,19 @@ export function PanelApp() {
   const [preview, setPreview] = useState<{
     title: string;
     urls: string[];
+    index: number;
   } | null>(null);
   const [banner, setBanner] = useState<{
     type: "error" | "info";
     text: string;
   } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [dangerConfirm, setDangerConfirm] = useState<null | "flags" | "drafts">(
-    null,
-  );
+  const [dangerConfirm, setDangerConfirm] = useState(false);
+  const [settingsSyncing, setSettingsSyncing] = useState(false);
   const [sourceDeleteConfirm, setSourceDeleteConfirm] =
     useState<DataSource | null>(null);
   const [importAfter, setImportAfterState] = useState("");
+  const [dayDraft, setDayDraft] = useState("");
   const emptyPollRef = useRef(0);
   const toastTimerRef = useRef<number | null>(null);
   const wipeTimerRef = useRef<number | null>(null);
@@ -251,18 +259,38 @@ export function PanelApp() {
       const sid = config.activeSourceId;
       const next = String(map[sid] ?? "").trim();
       setImportAfterState(next);
+      setDayDraft(importAfterToDateInput(next));
       setItems((prev) => sortPanelItems(prev, next));
     };
     chrome.storage.onChanged.addListener(onStorage);
     return () => chrome.storage.onChanged.removeListener(onStorage);
   }, [config.activeSourceId]);
 
-  const onImportAfterDateChange = async (e: ChangeEvent<HTMLInputElement>) => {
-    const raw = e.target.value;
-    const next = raw ? dateInputToImportAfter(raw) : "";
+  const applyImportAfter = async (nextRaw: string) => {
+    const next = nextRaw.trim();
     await setImportAfter(next, config.activeSourceId);
     setImportAfterState(next);
+    setDayDraft(importAfterToDateInput(next));
     setItems((prev) => sortPanelItems(prev, next));
+  };
+
+  useEffect(() => {
+    setDayDraft(importAfterToDateInput(importAfter));
+  }, [importAfter]);
+
+  const commitDayText = async () => {
+    const parsed = parseDayInput(dayDraft);
+    if (parsed === null) {
+      setDayDraft(importAfterToDateInput(importAfter));
+      showToast("请输入 YYYY-MM-DD，例如 2026-08-03");
+      return;
+    }
+    await applyImportAfter(parsed ? dateInputToImportAfter(parsed) : "");
+  };
+
+  const onDayPickerChange = async (raw: string) => {
+    const day = raw.trim();
+    await applyImportAfter(day ? dateInputToImportAfter(day) : "");
   };
 
   const loadFromLocal = useCallback(async (cat: string) => {
@@ -290,16 +318,10 @@ export function PanelApp() {
         uploaded: Boolean(it.uploaded),
         uploadedAt: it.uploadedAt ?? null,
       }));
-      let after = await getImportAfter();
-      if (!after) {
-        const maxId = maxUploadedFileId(mapped);
-        if (maxId) {
-          await setImportAfter(maxId);
-          after = maxId;
-        }
-      }
+      const after = await getImportAfter();
       if (gen !== loadGenRef.current) return;
       setImportAfterState(after);
+      setDayDraft(importAfterToDateInput(after));
       setItems(sortPanelItems(mapped, after));
 
       // 空列表且后台仍在 sync：短暂补拉几次（主清理靠上面的 sync 状态轮询）
@@ -398,6 +420,7 @@ export function PanelApp() {
       setCategory(nextCat);
       const after = await getImportAfter(cfg.activeSourceId);
       setImportAfterState(after);
+      setDayDraft(importAfterToDateInput(after));
       if (!isConfigReady(cfg)) {
         setTab("settings");
         setItems([]);
@@ -647,7 +670,7 @@ export function PanelApp() {
       importAfterRef.current,
     );
     if (!pending.length) {
-      showToast("没有可导入的草稿（检查导入起点）");
+      showToast("没有可导入的草稿（检查时间筛选）");
       return;
     }
     const queue = takeBatchMultiple(pending, AUTO_BATCH_SIZE);
@@ -667,6 +690,15 @@ export function PanelApp() {
     });
   };
 
+  const stepPreview = (delta: number) => {
+    setPreview((prev) => {
+      if (!prev || prev.urls.length <= 1) return prev;
+      const n = prev.urls.length;
+      const index = (prev.index + delta + n) % n;
+      return { ...prev, index };
+    });
+  };
+
   const openHistoryPreview = async (item: PanelItem) => {
     closePreview();
     try {
@@ -682,11 +714,33 @@ export function PanelApp() {
       const urls = res.blobs.map((b) =>
         URL.createObjectURL(base64ToBlob(b.base64, b.mime || "image/png")),
       );
-      setPreview({ title: item.title, urls });
+      setPreview({ title: item.title, urls, index: 0 });
     } catch (e) {
       showError(e instanceof Error ? e.message : String(e));
     }
   };
+
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closePreview();
+        return;
+      }
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        stepPreview(-1);
+        return;
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        stepPreview(1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [preview]);
 
   const onPauseAuto = () => {
     if (!autoRunning) return;
@@ -718,66 +772,71 @@ export function PanelApp() {
     persistSettingsPatch({ pace: normalizePace(pace) });
   };
 
+  const buildSettingsConfig = (): ExtensionConfig | null => {
+    const parsed = parseRepoSlug(settingsRepoSlug);
+    if (!parsed) {
+      setSettingsMsg("仓库请填写为 owner/repo");
+      return null;
+    }
+    const editing = getActiveSource(settingsForm);
+    if (!editing) {
+      setSettingsMsg("请先添加一个数据源");
+      return null;
+    }
+
+    const updatedSource: DataSource = {
+      ...editing,
+      owner: parsed.owner,
+      repo: parsed.repo,
+      basePath:
+        editing.basePath.trim().replace(/^\/+|\/+$/g, "") ||
+        DEFAULT_DRAFTS_FILE,
+      imagesPath:
+        editing.imagesPath.trim().replace(/^\/+|\/+$/g, "") ||
+        DEFAULT_IMAGES_PATH,
+      name:
+        editing.name.trim() ||
+        formatRepoSlug(parsed.owner, parsed.repo) ||
+        "数据源",
+      githubToken: editing.githubToken.trim(),
+    };
+
+    return normalizeConfig({
+      ...settingsForm,
+      sources: settingsForm.sources.map((s) =>
+        s.id === updatedSource.id ? updatedSource : s,
+      ),
+      activeSourceId: updatedSource.id,
+      dailyAutoPublish: Boolean(settingsForm.dailyAutoPublish),
+      dailyAutoCount: settingsForm.dailyAutoCount,
+      compactPublishWindow: Boolean(settingsForm.compactPublishWindow),
+      submitMode:
+        settingsForm.submitMode === "schedule" ? "schedule" : "draft",
+      scheduleStartHour: settingsForm.scheduleStartHour,
+      scheduleEndHour: settingsForm.scheduleEndHour,
+      scheduleMinLeadHours: settingsForm.scheduleMinLeadHours,
+      scheduleMaxAheadDays: settingsForm.scheduleMaxAheadDays,
+      pace: normalizePace(settingsForm.pace),
+      declareAiContent: settingsForm.declareAiContent !== false,
+      collectionName:
+        settingsForm.collectionName.trim() || DEFAULT_COLLECTION_NAME,
+      groupChatEnabled: settingsForm.groupChatEnabled === true,
+      groupChatName: settingsForm.groupChatName.trim(),
+      quoteNoteEnabled: settingsForm.quoteNoteEnabled === true,
+      requiredTopics:
+        settingsForm.requiredTopics.trim() || DEFAULT_REQUIRED_TOPICS,
+      bodyTemplate:
+        settingsForm.bodyTemplate.trim() || DEFAULT_BODY_TEMPLATE,
+    });
+  };
+
   const onSaveSettings = async (e: FormEvent) => {
     e.preventDefault();
     setSaving(true);
     setSettingsMsg(null);
     try {
-      const parsed = parseRepoSlug(settingsRepoSlug);
-      if (!parsed) {
-        setSettingsMsg("仓库请填写为 owner/repo");
-        return;
-      }
-      const editing = getActiveSource(settingsForm);
-      if (!editing) {
-        setSettingsMsg("请先添加一个数据源");
-        return;
-      }
-
-      const updatedSource: DataSource = {
-        ...editing,
-        owner: parsed.owner,
-        repo: parsed.repo,
-        basePath:
-          editing.basePath.trim().replace(/^\/+|\/+$/g, "") ||
-          DEFAULT_DRAFTS_FILE,
-        imagesPath:
-          editing.imagesPath.trim().replace(/^\/+|\/+$/g, "") ||
-          DEFAULT_IMAGES_PATH,
-        name:
-          editing.name.trim() ||
-          formatRepoSlug(parsed.owner, parsed.repo) ||
-          "数据源",
-        githubToken: editing.githubToken.trim(),
-      };
-
-      const next: ExtensionConfig = normalizeConfig({
-        ...settingsForm,
-        sources: settingsForm.sources.map((s) =>
-          s.id === updatedSource.id ? updatedSource : s,
-        ),
-        activeSourceId: updatedSource.id,
-        dailyAutoPublish: Boolean(settingsForm.dailyAutoPublish),
-        dailyAutoCount: settingsForm.dailyAutoCount,
-        compactPublishWindow: Boolean(settingsForm.compactPublishWindow),
-        submitMode:
-          settingsForm.submitMode === "schedule" ? "schedule" : "draft",
-        scheduleStartHour: settingsForm.scheduleStartHour,
-        scheduleEndHour: settingsForm.scheduleEndHour,
-        scheduleMinLeadHours: settingsForm.scheduleMinLeadHours,
-        scheduleMaxAheadDays: settingsForm.scheduleMaxAheadDays,
-        pace: normalizePace(settingsForm.pace),
-        declareAiContent: settingsForm.declareAiContent !== false,
-        collectionName:
-          settingsForm.collectionName.trim() || DEFAULT_COLLECTION_NAME,
-        groupChatEnabled: settingsForm.groupChatEnabled === true,
-        groupChatName: settingsForm.groupChatName.trim(),
-        quoteNoteEnabled: settingsForm.quoteNoteEnabled === true,
-        requiredTopics:
-          settingsForm.requiredTopics.trim() || DEFAULT_REQUIRED_TOPICS,
-        bodyTemplate:
-          settingsForm.bodyTemplate.trim() || DEFAULT_BODY_TEMPLATE,
-      });
+      const next = buildSettingsConfig();
+      if (!next) return;
 
       skipConfigReloadRef.current = true;
       const granted = await requestGitHubAccess();
@@ -791,14 +850,43 @@ export function PanelApp() {
         return;
       }
 
-      setSettingsMsg("已保存，正在同步草稿索引…");
-      setTab("main");
+      setSettingsMsg("配置已保存（未同步；需要时点「同步草稿」）");
+      showToast("配置已保存");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onSyncFromSettings = async () => {
+    if (settingsSyncing || saving || syncing || status?.syncing) return;
+    setSettingsSyncing(true);
+    setSettingsMsg(null);
+    try {
+      const next = buildSettingsConfig();
+      if (!next) return;
+      skipConfigReloadRef.current = true;
+      const granted = await requestGitHubAccess();
+      setGithubOk(granted);
+      await saveConfig(next);
+      await applyConfig(next);
+      if (!granted) {
+        setSettingsMsg("请先允许 GitHub 访问后再同步");
+        showToast("需授权 GitHub 访问");
+        return;
+      }
+      if (!isConfigReady(next)) {
+        setSettingsMsg("请先配置仓库再同步");
+        return;
+      }
+
+      setSettingsMsg("正在同步草稿索引…");
+      setSyncing(true);
       const syncRes = await sendRedFlow({
         type: "SYNC_NOW",
-        reason: "settings-save",
+        reason: "settings-sync",
       });
       if (!syncRes.ok) {
-        setSettingsMsg(`已保存，同步失败：${syncRes.error}`);
+        setSettingsMsg(`同步失败：${syncRes.error}`);
         showError(syncRes.error);
         setStatus((prev) => (prev ? { ...prev, syncing: false } : prev));
       } else {
@@ -807,42 +895,30 @@ export function PanelApp() {
         }
         const r = "result" in syncRes ? syncRes.result : undefined;
         setSettingsMsg(
-          r
-            ? `已保存并同步草稿 ${r.fetchedJson} 条`
-            : "配置已保存，本地缓存已更新",
+          r ? `已同步草稿 ${r.fetchedJson} 条` : "草稿索引已同步",
         );
-        showToast(
-          r ? `已同步草稿 ${r.fetchedJson} 条` : "配置已保存并同步",
-        );
+        showToast(r ? `已同步草稿 ${r.fetchedJson} 条` : "同步完成");
         const cats = getCategoryList(next);
         if (cats[0]) await loadFromLocal(cats[0]);
       }
     } finally {
-      setSaving(false);
+      setSyncing(false);
+      setSettingsSyncing(false);
     }
   };
 
-  const askDanger = (kind: "flags" | "drafts") => {
-    setDangerConfirm(kind);
+  const askWipeDrafts = () => {
+    setDangerConfirm(true);
     if (wipeTimerRef.current) window.clearTimeout(wipeTimerRef.current);
-    wipeTimerRef.current = window.setTimeout(() => setDangerConfirm(null), 8000);
+    wipeTimerRef.current = window.setTimeout(
+      () => setDangerConfirm(false),
+      8000,
+    );
   };
-
-  const onClearHistory = async () => {
-    if (wipeTimerRef.current) window.clearTimeout(wipeTimerRef.current);
-    setDangerConfirm(null);
-    await sendRedFlow({ type: "CLEAR_UPLOADED" });
-    await clearUploadHistory();
-    setSettingsMsg("已清空发布标记（草稿内容仍保留）");
-    showToast("已清空发布标记");
-    if (category) await loadFromLocal(category);
-  };
-
-  const onAskWipeAll = () => askDanger("drafts");
 
   const onConfirmWipeAll = async () => {
     if (wipeTimerRef.current) window.clearTimeout(wipeTimerRef.current);
-    setDangerConfirm(null);
+    setDangerConfirm(false);
     autoUploadQueue.pause();
     try {
       const res = await sendRedFlow({ type: "WIPE_ALL_DATA" });
@@ -854,7 +930,7 @@ export function PanelApp() {
       setItems([]);
       if ("status" in res) setStatus(res.status);
       setSettingsMsg("已清空草稿列表，正在重新同步…");
-      showToast("草稿列表已清空，保留令牌和仓库配置");
+      showToast("草稿列表已清空；已传记录仍保留");
       if (!isConfigReady(config)) return;
       setSyncing(true);
       const syncRes = await sendRedFlow({
@@ -869,7 +945,7 @@ export function PanelApp() {
         const r = "result" in syncRes ? syncRes.result : undefined;
         setSettingsMsg(
           r
-            ? `草稿列表已重建，同步 ${r.fetchedJson} 条`
+            ? `草稿列表已重建，同步 ${r.fetchedJson} 条（已传 id 已合并）`
             : "草稿列表已清空并重新同步",
         );
         showToast(
@@ -925,6 +1001,12 @@ export function PanelApp() {
   }, [config.dailyAutoPublish, config.dailyAutoCount]);
 
   const showSyncChrome = syncing || Boolean(status?.syncing);
+  const uploadedCount = items.filter((i) => i.uploaded).length;
+  const pendingCount = items.filter((i) => !i.uploaded).length;
+  const eligibleCount = items.filter(
+    (i) => !i.uploaded && isAfterImportAfter(i.fileId, importAfter),
+  ).length;
+  const dayValue = importAfterToDateInput(importAfter);
 
   return (
     <aside
@@ -1006,7 +1088,7 @@ export function PanelApp() {
             </div>
             <p className="redflow-toolbar-stats">
               {items.length
-                ? `${items.length} 条 · 未传 ${items.filter((i) => !i.uploaded).length} · 可导 ${items.filter((i) => !i.uploaded && isAfterImportAfter(i.fileId, importAfter)).length} · 已传 ${items.filter((i) => i.uploaded).length}`
+                ? `可导 ${eligibleCount} · 未传 ${pendingCount} · 已传 ${uploadedCount}（共 ${items.length}）`
                 : "同步后显示"}
               {autoProgress
                 ? ` · 自动 ${autoProgress.current}/${autoProgress.total}`
@@ -1015,17 +1097,46 @@ export function PanelApp() {
           </div>
 
           <div className="redflow-cutoff-bar">
-            <label className="redflow-cutoff-label">
-              <span className="redflow-cutoff-title">导入起点</span>
-              <input
-                type="date"
-                className="redflow-cutoff-date"
-                value={importAfterToDateInput(importAfter)}
-                onChange={(e) => void onImportAfterDateChange(e)}
-                disabled={showSyncChrome || autoRunning}
-                title="仅此日期之后可导入；发布成功自动更新（Chrome 同步）"
-              />
-            </label>
+            <div className="redflow-day-row">
+              <span className="redflow-cutoff-title">时间筛选</span>
+              <div className="redflow-day-field">
+                <input
+                  type="text"
+                  className="redflow-day-input"
+                  inputMode="numeric"
+                  placeholder="YYYY-MM-DD"
+                  spellCheck={false}
+                  value={dayDraft}
+                  disabled={showSyncChrome || autoRunning}
+                  title="该日及以前不可导；留空不限。可手输或点右侧日历。上传不会改这里"
+                  onChange={(e) => setDayDraft(e.target.value)}
+                  onBlur={() => void commitDayText()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      (e.target as HTMLInputElement).blur();
+                    }
+                  }}
+                />
+                <input
+                  type="date"
+                  className="redflow-day-picker"
+                  value={dayValue}
+                  disabled={showSyncChrome || autoRunning}
+                  title="点选日期"
+                  onChange={(e) => void onDayPickerChange(e.target.value)}
+                />
+              </div>
+              <button
+                type="button"
+                className="redflow-range-reset"
+                disabled={showSyncChrome || autoRunning || !importAfter}
+                onClick={() => void applyImportAfter("")}
+                title="清除日期限制"
+              >
+                全部
+              </button>
+            </div>
           </div>
 
           {(autoRunning || autoPaused) && (
@@ -1094,29 +1205,31 @@ export function PanelApp() {
             {items.map((item) => {
               const beforeCutoff =
                 !item.uploaded && !isAfterImportAfter(item.fileId, importAfter);
+              const imgCount = Math.max(0, Number(item.imageCount) || 0);
               return (
               <article
                 key={`${item.category}::${item.fileId}`}
-                className={`redflow-card ${item.uploaded ? "is-synced" : ""} ${beforeCutoff ? "is-before-cutoff" : ""}`}
+                className={`redflow-row ${item.uploaded ? "is-synced" : ""} ${beforeCutoff ? "is-before-cutoff" : ""}`}
               >
-                <h3 className="redflow-card-title" title={item.title}>
-                  {item.title}
-                </h3>
-                {item.keywords?.length ? (
-                  <div className="redflow-keywords" title={item.keywords.join(" · ")}>
-                    {item.keywords.map((kw) => (
-                      <span key={kw} className="redflow-kw">
-                        {kw}
-                      </span>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="redflow-keywords-empty">无关键词</p>
-                )}
-                <div className="redflow-card-foot">
+                <div className="redflow-row-body">
+                  <h3 className="redflow-row-title" title={item.title}>
+                    {item.title}
+                  </h3>
                   <time className="redflow-time" title={item.fileId}>
                     {formatDraftTime(item.fileId)}
                   </time>
+                </div>
+                <div className="redflow-row-action">
+                  <span
+                    className={`redflow-img-badge ${imgBadgeClass(imgCount)}`}
+                    title={
+                      imgCount > 0
+                        ? `${imgCount} 张配图`
+                        : "配图张数未知（导入时再拉）"
+                    }
+                  >
+                    {imgCount > 0 ? imgCount : "—"}
+                  </span>
                   {item.uploaded ? (
                     <span
                       className="redflow-badge"
@@ -1135,7 +1248,9 @@ export function PanelApp() {
                         autoRunning
                       }
                       title={
-                        beforeCutoff ? "早于导入起点，调整日期后可导入" : undefined
+                        beforeCutoff
+                          ? "早于时间筛选日期，调整后可导入"
+                          : undefined
                       }
                       onClick={() => void onImport(item)}
                     >
@@ -1753,14 +1868,29 @@ export function PanelApp() {
 
           <div className="redflow-settings-actions">
             <button type="submit" className="redflow-btn" disabled={saving}>
-              {saving ? "保存中…" : "保存并同步草稿"}
+              {saving ? "保存中…" : "保存配置"}
+            </button>
+            <button
+              type="button"
+              className="redflow-btn redflow-btn-ghost"
+              disabled={
+                saving ||
+                settingsSyncing ||
+                syncing ||
+                Boolean(status?.syncing) ||
+                !isConfigReady(settingsForm)
+              }
+              onClick={() => void onSyncFromSettings()}
+            >
+              {settingsSyncing || syncing || status?.syncing
+                ? "同步中…"
+                : "同步草稿"}
             </button>
             {dangerConfirm ? (
               <div className="redflow-wipe-confirm">
                 <p>
-                  {dangerConfirm === "flags"
-                    ? "只去掉已导入 / 已发布标记，草稿和配图都还在。"
-                    : "只清空本机草稿列表和发布记录，然后重新同步索引。令牌、仓库和路径配置不动。"}
+                  只清空本机草稿列表，然后重新同步索引。已传 id
+                  永久保留，不会被清掉；令牌、仓库和路径配置也不动。
                 </p>
                 <div className="redflow-wipe-actions">
                   <button
@@ -1770,7 +1900,7 @@ export function PanelApp() {
                       if (wipeTimerRef.current) {
                         window.clearTimeout(wipeTimerRef.current);
                       }
-                      setDangerConfirm(null);
+                      setDangerConfirm(false);
                     }}
                   >
                     取消
@@ -1778,31 +1908,23 @@ export function PanelApp() {
                   <button
                     type="button"
                     className="redflow-btn redflow-btn-danger"
-                    onClick={() =>
-                      void (dangerConfirm === "flags"
-                        ? onClearHistory()
-                        : onConfirmWipeAll())
-                    }
+                    onClick={() => void onConfirmWipeAll()}
                   >
-                    {dangerConfirm === "flags" ? "确认清空标记" : "确认清空列表"}
+                    确认清空列表
                   </button>
                 </div>
               </div>
             ) : (
               <section className="redflow-settings-section redflow-settings-section-danger">
                 <h3 className="redflow-settings-title">数据清理</h3>
-                <div className="redflow-danger-row">
+                <p className="redflow-settings-hint">
+                  已传 id 用于防重复，界面上无法清空。
+                </p>
+                <div className="redflow-danger-row redflow-danger-row-single">
                   <button
                     type="button"
                     className="redflow-btn-soft"
-                    onClick={() => askDanger("flags")}
-                  >
-                    清空发布标记
-                  </button>
-                  <button
-                    type="button"
-                    className="redflow-btn-soft"
-                    onClick={onAskWipeAll}
+                    onClick={askWipeDrafts}
                   >
                     清空草稿列表
                   </button>
@@ -1818,6 +1940,7 @@ export function PanelApp() {
           className="redflow-lightbox"
           role="dialog"
           aria-label="查看配图"
+          aria-modal="true"
           onClick={closePreview}
         >
           <div
@@ -1825,15 +1948,44 @@ export function PanelApp() {
             onClick={(e) => e.stopPropagation()}
           >
             <header className="redflow-lightbox-head">
-              <span>{preview.title}</span>
+              <span className="redflow-lightbox-title" title={preview.title}>
+                {preview.title}
+              </span>
+              <span className="redflow-lightbox-count">
+                {preview.index + 1}/{preview.urls.length}
+              </span>
               <button type="button" onClick={closePreview} title="关闭">
                 ×
               </button>
             </header>
-            <div className="redflow-lightbox-imgs">
-              {preview.urls.map((u) => (
-                <img key={u} src={u} alt="" />
-              ))}
+            <div className="redflow-lightbox-stage">
+              {preview.urls.length > 1 && (
+                <button
+                  type="button"
+                  className="redflow-lightbox-nav is-prev"
+                  onClick={() => stepPreview(-1)}
+                  title="上一张"
+                  aria-label="上一张"
+                >
+                  ‹
+                </button>
+              )}
+              <img
+                className="redflow-lightbox-img"
+                src={preview.urls[preview.index]}
+                alt=""
+              />
+              {preview.urls.length > 1 && (
+                <button
+                  type="button"
+                  className="redflow-lightbox-nav is-next"
+                  onClick={() => stepPreview(1)}
+                  title="下一张"
+                  aria-label="下一张"
+                >
+                  ›
+                </button>
+              )}
             </div>
           </div>
         </div>

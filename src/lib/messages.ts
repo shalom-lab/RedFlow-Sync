@@ -22,7 +22,6 @@ export type RedFlowRequest =
     }
   | { type: "GET_SYNC_STATUS" }
   | { type: "MARK_UPLOADED"; category: string; fileId: string }
-  | { type: "CLEAR_UPLOADED" }
   | { type: "WIPE_ALL_DATA" };
 
 export interface CachedItemDTO {
@@ -42,6 +41,8 @@ export interface CachedItemDTO {
   uploadedAt: string | null;
   hasImage: boolean;
   hasThumb: boolean;
+  /** 配图张数；未知为 0 */
+  imageCount: number;
 }
 
 export interface SyncStatusDTO {
